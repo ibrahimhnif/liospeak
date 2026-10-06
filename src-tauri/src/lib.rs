@@ -233,7 +233,16 @@ pub fn run() {
                     _ => {}
                 });
 
-            if let Some(icon) = app.default_window_icon() {
+            #[cfg(target_os = "macos")]
+            {
+                tray_builder = tray_builder.icon_as_template(true);
+            }
+
+            // Load dedicated macOS Menu Bar tray icon
+            let custom_tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png")).ok();
+            if let Some(icon) = custom_tray_icon {
+                tray_builder = tray_builder.icon(icon);
+            } else if let Some(icon) = app.default_window_icon() {
                 tray_builder = tray_builder.icon(icon.clone());
             }
 

@@ -1,0 +1,21 @@
+<svg width="44" height="44" viewBox="0 0 44 44" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Central Microphone Capsule -->
+  <rect x="18" y="7" width="8" height="15" rx="4" fill="white" />
+  
+  <!-- Cradle / Arc around mic -->
+  <path d="M13 18C13 22.97 17.03 27 22 27C26.97 27 31 22.97 31 18" stroke="white" stroke-width="2.2" stroke-linecap="round" />
+  
+  <!-- Stand Stem -->
+  <path d="M22 27V33" stroke="white" stroke-width="2.2" stroke-linecap="round" />
+  
+  <!-- Stand Base -->
+  <path d="M16 33H28" stroke="white" stroke-width="2.2" stroke-linecap="round" />
+  
+  <!-- Left Soundwave Arcs -->
+  <path d="M8 15C7 17.2 7 20.8 8 23" stroke="white" stroke-width="2" stroke-linecap="round" />
+  <path d="M4 12C2.5 15.5 2.5 22.5 4 26" stroke="white" stroke-width="2" stroke-linecap="round" opacity="0.8" />
+  
+  <!-- Right Soundwave Arcs -->
+  <path d="M36 15C37 17.2 37 20.8 36 23" stroke="white" stroke-width="2" stroke-linecap="round" />
+  <path d="M40 12C41.5 15.5 41.5 22.5 40 26" stroke="white" stroke-width="2" stroke-linecap="round" opacity="0.8" />
+</svg>
