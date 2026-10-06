@@ -246,8 +246,12 @@ export const SettingsView: React.FC = () => {
       {/* HEADER */}
       <header className="app-header">
         <div className="header-brand">
-          <div className="logo-badge">
-            <Mic size={20} className="logo-icon" />
+          <div className="logo-badge" style={{ padding: '0', background: 'transparent', overflow: 'hidden' }}>
+            <img
+              src="/app-icon.png"
+              alt="LioSpeak"
+              style={{ width: '32px', height: '32px', borderRadius: '8px', display: 'block', objectFit: 'cover' }}
+            />
           </div>
           <div>
             <h1 className="brand-title">LioSpeak</h1>
