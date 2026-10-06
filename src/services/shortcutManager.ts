@@ -21,6 +21,7 @@ class DictationCoordinator {
   private currentShortcut = '';
   private lastFnPressTime = 0;
   private isEnabled = true;
+  private startPromise: Promise<void> | null = null;
 
   constructor() {
     // Crucial: Only initialize in MAIN window, never in the overlay HUD window!
@@ -34,7 +35,18 @@ class DictationCoordinator {
       this.broadcastStatus({ state: 'listening', volume });
     });
 
+    // Automatically pre-warm mic on startup so recording is instantaneous
+    this.recorder.prewarm().catch((e) => {
+      console.warn('Background mic prewarm notice:', e);
+    });
+
     this.setupFnKeyListener();
+  }
+
+  public async prewarm(): Promise<void> {
+    if (this.recorder) {
+      await this.recorder.prewarm();
+    }
   }
 
   private async setupFnKeyListener() {
@@ -165,7 +177,8 @@ class DictationCoordinator {
     try {
       await invoke('show_overlay');
       await this.broadcastStatus({ state: 'listening', volume: 0 });
-      await this.recorder?.start();
+      this.startPromise = this.recorder?.start() || null;
+      await this.startPromise;
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       termLog(`Gagal memulai perekaman: ${errorMsg}`, 'error');
@@ -174,6 +187,8 @@ class DictationCoordinator {
         await invoke('hide_overlay');
         await this.broadcastStatus({ state: 'idle' });
       }, 3500);
+    } finally {
+      this.startPromise = null;
     }
   }
 
@@ -184,6 +199,17 @@ class DictationCoordinator {
     }
 
     termLog('>>> [TRIGGER] Menghentikan rekaman & memulai transkripsi...', 'info');
+
+    // If start is still initializing in the background, wait for it before stopping!
+    if (this.startPromise) {
+      termLog('Menunggu proses inisialisasi perekam selesai sebelum menghentikan...', 'info');
+      try {
+        await this.startPromise;
+      } catch (e) {
+        termLog(`Perekaman gagal saat ditunggu di stopAndTranscribe: ${e}`, 'warn');
+      }
+    }
+
     try {
       await this.broadcastStatus({ state: 'transcribing' });
       const recordResult = await this.recorder.stop();

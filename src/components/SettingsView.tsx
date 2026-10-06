@@ -140,6 +140,10 @@ export const SettingsView: React.FC = () => {
     dictationCoordinator.updateShortcut(config.shortcut).catch((e) => {
       console.error('Failed to bind initial shortcut:', e);
     });
+    // Pre-warm microphone so recording starts with zero latency
+    dictationCoordinator.prewarm().catch((e) => {
+      console.warn('Pre-warm error:', e);
+    });
   }, []);
 
   const updateConfig = (patch: Partial<AppConfig>) => {

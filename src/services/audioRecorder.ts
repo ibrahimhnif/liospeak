@@ -15,6 +15,8 @@ export class AudioRecorder {
   private muteNode: GainNode | null = null;
   private pcmBuffers: Float32Array[] = [];
   private recording = false;
+  private startPromise: Promise<void> | null = null;
+  private prewarmPromise: Promise<void> | null = null;
   private startTime = 0;
   private chunkCount = 0;
   private onVolumeChange?: (volume: number) => void;
@@ -27,109 +29,173 @@ export class AudioRecorder {
     return this.recording;
   }
 
-  public async start(): Promise<void> {
-    if (this.recording) return;
+  /**
+   * Pre-warms the microphone stream and AudioContext on app launch
+   * so that recording starts with 0ms latency when the user triggers it.
+   */
+  public async prewarm(): Promise<void> {
+    if (this.isStreamAlive()) return;
+    if (this.prewarmPromise) return this.prewarmPromise;
 
-    termLog('Memulai AudioRecorder...', 'info');
-    this.pcmBuffers = [];
-    this.chunkCount = 0;
-    this.startTime = Date.now();
+    this.prewarmPromise = (async () => {
+      try {
+        termLog('[AudioRecorder] Memulai pre-warm mikrofon agar siap pakai tanpa delay...', 'info');
+        await this.ensureStream();
+        termLog('[AudioRecorder] Mikrofon berhasil di-prewarm & siap mendikte!', 'info');
+      } catch (err) {
+        termLog(`[AudioRecorder] Pre-warm notice: ${err}`, 'warn');
+      } finally {
+        this.prewarmPromise = null;
+      }
+    })();
 
-    // 1. Validate navigator.mediaDevices
+    return this.prewarmPromise;
+  }
+
+  private isStreamAlive(): boolean {
+    if (!this.mediaStream || !this.mediaStream.active) return false;
+    const tracks = this.mediaStream.getAudioTracks();
+    return tracks.length > 0 && tracks.some((t) => t.readyState === 'live');
+  }
+
+  private async ensureStream(): Promise<MediaStream> {
+    if (this.isStreamAlive()) {
+      return this.mediaStream!;
+    }
+
     if (!navigator || !navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
-      const err = 'Akses mikrofon tidak didukung atau diblokir oleh sistem macOS. Pastikan izin mikrofon diberikan di System Settings -> Privacy & Security -> Microphone.';
+      const err =
+        'Akses mikrofon tidak didukung atau diblokir oleh macOS. Pastikan izin mikrofon diizinkan di System Settings -> Privacy & Security -> Microphone.';
       termLog(err, 'error');
       throw new Error(err);
     }
 
-    // 2. Request user media (mic stream)
-    try {
-      termLog('Meminta izin stream mikrofon via getUserMedia...', 'info');
-      this.mediaStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
-    } catch (err: unknown) {
-      const msg = `Gagal mendapatkan akses mikrofon: ${err instanceof Error ? err.message : String(err)}`;
-      termLog(msg, 'error');
-      throw new Error(msg);
-    }
+    termLog('Meminta stream mikrofon via getUserMedia...', 'info');
+    this.mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
 
     const tracks = this.mediaStream.getAudioTracks();
-    termLog(`Mikrofon terhubung! Track count: ${tracks.length}, label: "${tracks[0]?.label}", readyState: ${tracks[0]?.readyState}`, 'info');
+    termLog(
+      `Mikrofon terhubung! Track count: ${tracks.length}, label: "${tracks[0]?.label || 'Microphone'}"`,
+      'info'
+    );
 
-    // 3. Create AudioContext (match hardware rate to prevent WebKit distortion)
-    const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    this.audioContext = new AudioCtx();
-    termLog(`AudioContext dibuat! Hardware sampleRate: ${this.audioContext.sampleRate}Hz, state: ${this.audioContext.state}`, 'info');
+    return this.mediaStream;
+  }
 
-    // WebKit often starts in 'suspended' state without user click. Must resume!
-    if (this.audioContext.state === 'suspended') {
-      termLog('AudioContext dalam status "suspended", memanggil audioContext.resume()...', 'info');
-      await this.audioContext.resume();
-      termLog(`AudioContext setelah resume: status = ${this.audioContext.state}`, 'info');
+  public async start(): Promise<void> {
+    if (this.recording) return;
+
+    // If start is already in progress, return the existing promise
+    if (this.startPromise) {
+      return this.startPromise;
     }
 
-    this.inputNode = this.audioContext.createMediaStreamSource(this.mediaStream);
+    this.startPromise = (async () => {
+      try {
+        termLog('Memulai AudioRecorder...', 'info');
+        this.pcmBuffers = [];
+        this.chunkCount = 0;
+        this.startTime = Date.now();
 
-    // 4. Create ScriptProcessorNode (buffer size 4096)
-    this.processor = this.audioContext.createScriptProcessor(4096, 1, 1);
+        // 1. Ensure stream is warm and ready
+        await this.ensureStream();
 
-    this.processor.onaudioprocess = (e) => {
-      if (!this.recording) return;
+        // 2. Initialize or resume AudioContext
+        const AudioCtx =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
 
-      const input = e.inputBuffer.getChannelData(0);
-      const copy = new Float32Array(input.length);
-      copy.set(input);
-      this.pcmBuffers.push(copy);
-      this.chunkCount++;
+        if (!this.audioContext || this.audioContext.state === 'closed') {
+          this.audioContext = new AudioCtx();
+          termLog(`AudioContext dibuat! Hardware sampleRate: ${this.audioContext.sampleRate}Hz`, 'info');
+        }
 
-      // Calculate RMS for visual volume meter
-      let sum = 0;
-      for (let i = 0; i < input.length; i++) {
-        sum += input[i] * input[i];
+        if (this.audioContext.state === 'suspended') {
+          termLog('Resume AudioContext...', 'info');
+          await this.audioContext.resume();
+        }
+
+        // 3. Connect audio processing nodes
+        this.inputNode = this.audioContext.createMediaStreamSource(this.mediaStream!);
+        this.processor = this.audioContext.createScriptProcessor(4096, 1, 1);
+
+        this.processor.onaudioprocess = (e) => {
+          if (!this.recording) return;
+
+          const input = e.inputBuffer.getChannelData(0);
+          const copy = new Float32Array(input.length);
+          copy.set(input);
+          this.pcmBuffers.push(copy);
+          this.chunkCount++;
+
+          // Calculate RMS for visual volume meter
+          let sum = 0;
+          for (let i = 0; i < input.length; i++) {
+            sum += input[i] * input[i];
+          }
+          const rms = Math.sqrt(sum / input.length);
+          const normalized = Math.min(1.0, rms * 5.0);
+
+          if (this.chunkCount % 5 === 1) {
+            termLog(
+              `[Perekaman] Chunk #${this.chunkCount} diterima: ${input.length} samples, RMS volume: ${normalized.toFixed(3)}`,
+              'log'
+            );
+          }
+
+          if (this.onVolumeChange) {
+            this.onVolumeChange(normalized);
+          }
+        };
+
+        // Connect through a zero-gain node to destination to avoid speaker feedback while keeping processor active
+        this.muteNode = this.audioContext.createGain();
+        this.muteNode.gain.value = 0.0;
+
+        this.inputNode.connect(this.processor);
+        this.processor.connect(this.muteNode);
+        this.muteNode.connect(this.audioContext.destination);
+
+        this.recording = true;
+        termLog('Perekaman audio aktif berjalan!', 'info');
+      } finally {
+        this.startPromise = null;
       }
-      const rms = Math.sqrt(sum / input.length);
-      const normalized = Math.min(1.0, rms * 5.0);
+    })();
 
-      if (this.chunkCount % 5 === 1) {
-        termLog(`[Perekaman] Chunk #${this.chunkCount} diterima: ${input.length} samples, RMS volume: ${normalized.toFixed(3)}`, 'log');
-      }
-
-      if (this.onVolumeChange) {
-        this.onVolumeChange(normalized);
-      }
-    };
-
-    // 5. Connect through zero-gain node to destination to avoid speaker feedback while keeping processor active
-    this.muteNode = this.audioContext.createGain();
-    this.muteNode.gain.value = 0.0;
-
-    this.inputNode.connect(this.processor);
-    this.processor.connect(this.muteNode);
-    this.muteNode.connect(this.audioContext.destination);
-
-    this.recording = true;
-    termLog('Perekaman audio aktif berjalan!', 'info');
+    return this.startPromise;
   }
 
   public async stop(): Promise<AudioRecordResult> {
     termLog(`Menghentikan perekaman audio... (total chunk diterima: ${this.chunkCount})`, 'info');
 
+    // If start is still initializing (e.g. quick tap), wait for it to finish first
+    if (this.startPromise) {
+      termLog('Menunggu inisialisasi perekaman selesai sebelum berhenti...', 'info');
+      try {
+        await this.startPromise;
+      } catch {
+        // if start failed, continue to throw
+      }
+    }
+
     if (!this.recording) {
       termLog('Stop dipanggil tapi status recording = false', 'warn');
-      throw new Error('Perekam suara belum dimulai.');
+      throw new Error('Perekam suara belum dimulai atau belum selesai inisialisasi.');
     }
 
     this.recording = false;
     const durationMs = Date.now() - this.startTime;
     const inputSampleRate = this.audioContext?.sampleRate || 44100;
 
-    // Disconnect audio nodes
+    // Disconnect active nodes to stop processing
     if (this.processor) {
       this.processor.disconnect();
       this.processor = null;
@@ -142,24 +208,29 @@ export class AudioRecorder {
       this.inputNode.disconnect();
       this.inputNode = null;
     }
-    if (this.audioContext) {
-      await this.audioContext.close();
-      this.audioContext = null;
-    }
-    if (this.mediaStream) {
-      this.mediaStream.getTracks().forEach((track) => track.stop());
-      this.mediaStream = null;
+
+    // Suspend AudioContext to conserve CPU while idle, but DO NOT DESTROY mediaStream
+    // Keeping mediaStream alive ensures next recording trigger is instantaneous (<1ms)!
+    if (this.audioContext && this.audioContext.state === 'running') {
+      try {
+        await this.audioContext.suspend();
+      } catch {
+        // ignore
+      }
     }
 
-    termLog(`Perekaman selesai. Durasi: ${(durationMs / 1000).toFixed(2)} detik, Buffer count: ${this.pcmBuffers.length}`, 'info');
+    termLog(
+      `Perekaman selesai. Durasi: ${(durationMs / 1000).toFixed(2)} detik, Buffer count: ${this.pcmBuffers.length}`,
+      'info'
+    );
 
     if (this.pcmBuffers.length === 0) {
-      const err = 'Tidak ada data audio yang tertangkap (0 chunk buffer). Pastikan mikrofon berfungsi dan tidak diblokir.';
+      const err = 'Tidak ada data audio yang tertangkap (0 chunk buffer).';
       termLog(err, 'error');
       throw new Error(err);
     }
 
-    // Merge PCM buffers
+    // Merge raw PCM buffers
     let totalLength = 0;
     for (const buf of this.pcmBuffers) {
       totalLength += buf.length;
@@ -189,6 +260,33 @@ export class AudioRecorder {
       durationMs,
       sampleRate: 16000,
     };
+  }
+
+  /**
+   * Completely closes mediaStream and AudioContext when the app exits.
+   */
+  public async destroy(): Promise<void> {
+    this.recording = false;
+    if (this.processor) {
+      this.processor.disconnect();
+      this.processor = null;
+    }
+    if (this.muteNode) {
+      this.muteNode.disconnect();
+      this.muteNode = null;
+    }
+    if (this.inputNode) {
+      this.inputNode.disconnect();
+      this.inputNode = null;
+    }
+    if (this.audioContext) {
+      await this.audioContext.close();
+      this.audioContext = null;
+    }
+    if (this.mediaStream) {
+      this.mediaStream.getTracks().forEach((t) => t.stop());
+      this.mediaStream = null;
+    }
   }
 }
 
