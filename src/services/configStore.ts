@@ -8,7 +8,10 @@ export interface DictationHistoryItem {
   text: string;
   timestamp: number;
   engine: 'gemini' | 'groq';
+  model?: string;
   durationMs: number;
+  costUsd?: number;
+  costIdr?: number;
 }
 
 export interface AppConfig {
@@ -25,6 +28,9 @@ export interface AppConfig {
   language: 'auto' | 'id' | 'en';
   systemPrompt: string;
   history: DictationHistoryItem[];
+  lifetimeCostUsd: number;
+  lifetimeDurationMs: number;
+  lifetimeCount: number;
 }
 
 const DEFAULT_SYSTEM_PROMPT = `You are a professional, high-accuracy dictation assistant.
@@ -52,6 +58,9 @@ const DEFAULT_CONFIG: AppConfig = {
   language: 'auto',
   systemPrompt: DEFAULT_SYSTEM_PROMPT,
   history: [],
+  lifetimeCostUsd: 0,
+  lifetimeDurationMs: 0,
+  lifetimeCount: 0,
 };
 
 const STORAGE_KEY = 'liospeak_config';
@@ -67,6 +76,15 @@ export function loadConfig(): AppConfig {
     }
     if (config.stopPaddingMs === undefined || typeof config.stopPaddingMs !== 'number') {
       config.stopPaddingMs = 400;
+    }
+    if (typeof config.lifetimeCostUsd !== 'number') {
+      config.lifetimeCostUsd = 0;
+    }
+    if (typeof config.lifetimeDurationMs !== 'number') {
+      config.lifetimeDurationMs = 0;
+    }
+    if (typeof config.lifetimeCount !== 'number') {
+      config.lifetimeCount = 0;
     }
     return config;
   } catch (err) {
@@ -91,12 +109,32 @@ export function addHistoryItem(item: Omit<DictationHistoryItem, 'id'>): void {
     ...item,
     id: `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
   };
-  // Keep last 50 items
-  const history = [newItem, ...(current.history || [])].slice(0, 50);
-  saveConfig({ ...current, history });
+  // Keep last 100 items
+  const history = [newItem, ...(current.history || [])].slice(0, 100);
+  const lifetimeCostUsd = (current.lifetimeCostUsd || 0) + (item.costUsd || 0);
+  const lifetimeDurationMs = (current.lifetimeDurationMs || 0) + (item.durationMs || 0);
+  const lifetimeCount = (current.lifetimeCount || 0) + 1;
+
+  saveConfig({
+    ...current,
+    history,
+    lifetimeCostUsd,
+    lifetimeDurationMs,
+    lifetimeCount,
+  });
 }
 
 export function clearHistory(): void {
   const current = loadConfig();
   saveConfig({ ...current, history: [] });
+}
+
+export function resetLifetimeStats(): void {
+  const current = loadConfig();
+  saveConfig({
+    ...current,
+    lifetimeCostUsd: 0,
+    lifetimeDurationMs: 0,
+    lifetimeCount: 0,
+  });
 }

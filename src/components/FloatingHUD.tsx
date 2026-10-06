@@ -102,7 +102,23 @@ export const FloatingHUD: React.FC = () => {
               <CheckCircle2 className="hud-icon" size={20} />
             </div>
             <div className="hud-body">
-              <span className="hud-title">Ditempel ke kursor!</span>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                <span className="hud-title">Ditempel ke kursor!</span>
+                {status.formattedCost && (
+                  <span
+                    style={{
+                      fontSize: '10px',
+                      color: 'rgba(255, 255, 255, 0.75)',
+                      background: 'rgba(255, 255, 255, 0.12)',
+                      padding: '1px 6px',
+                      borderRadius: '999px',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {status.formattedCost}
+                  </span>
+                )}
+              </div>
               <span className="hud-preview" title={status.text}>
                 {status.text ? `"${status.text}"` : 'Teks siap'}
               </span>

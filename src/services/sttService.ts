@@ -1,10 +1,24 @@
 import { AppConfig } from './configStore';
 import { AudioRecordResult } from './audioRecorder';
 import { termLog } from './logger';
+import { calculateAudioCost } from './costCalculator';
 
 export interface TranscribeResult {
   text: string;
   engine: 'gemini' | 'groq';
+  model: string;
+  costUsd: number;
+  costIdr: number;
+  formattedCost: string;
+}
+
+interface InternalGeminiResult {
+  text: string;
+  usage?: {
+    total_input_tokens?: number;
+    total_output_tokens?: number;
+    audio_tokens?: number;
+  };
 }
 
 /**
@@ -27,150 +41,223 @@ export async function transcribeAudio(
     if (currentModel === 'gemini-3.5-transcribe') {
       try {
         termLog('[STT] Mengirim audio ke Gemini 3.5 Transcribe API...', 'info');
-        let text = await transcribeWithGemini35(audioResult.blob, audioResult.base64, config);
+        let geminiResult = await transcribeWithGemini35(audioResult.blob, audioResult.base64, config);
 
-        // If Gemini 3.5 returns empty string, fallback to gemini-3.8-flash!
-        if (!text || !text.trim()) {
-          termLog('[STT] Gemini 3.5 mengembalikan teks kosong, otomatis fallback ke gemini-3.8-flash...', 'warn');
-          text = await transcribeWithGemini(audioResult.base64, {
+        // If Gemini 3.5 returns empty text (e.g. quiet or non-transcribed), try gemini-3.8-flash fallback
+        if (!geminiResult.text || !geminiResult.text.trim()) {
+          termLog('[STT] Gemini 3.5 tidak menghasilkan teks, mencoba fallback ke gemini-3.8-flash...', 'info');
+          const fallbackResult = await transcribeWithGemini(audioResult.base64, {
             ...config,
             geminiModel: 'gemini-3.8-flash',
           });
+          if (fallbackResult.text && fallbackResult.text.trim()) {
+            geminiResult = fallbackResult;
+          }
         }
 
-        termLog(`[STT] Sukses Gemini STT: "${text}"`, 'info');
-        return { text, engine: 'gemini' };
+        const finalText = cleanTranscribedText(geminiResult.text);
+        const cost = calculateAudioCost(
+          'gemini',
+          'gemini-3.5-transcribe',
+          audioResult.durationMs,
+          finalText.length,
+          geminiResult.usage
+        );
+
+        termLog(
+          `[STT Cost] Durasi: ${(audioResult.durationMs / 1000).toFixed(1)}s | Biaya: ${cost.formattedUsd} (${cost.formattedIdr})`,
+          'info'
+        );
+
+        return {
+          text: finalText,
+          engine: 'gemini',
+          model: 'gemini-3.5-transcribe',
+          costUsd: cost.costUsd,
+          costIdr: cost.costIdr,
+          formattedCost: cost.formattedUsd,
+        };
       } catch (err) {
         termLog(`Gemini 3.5 error (${err}), mencoba fallback ke gemini-3.8-flash...`, 'warn');
-        const text = await transcribeWithGemini(audioResult.base64, {
+        const fallbackResult = await transcribeWithGemini(audioResult.base64, {
           ...config,
           geminiModel: 'gemini-3.8-flash',
         });
-        termLog(`[STT] Sukses Fallback Gemini 3.8: "${text}"`, 'info');
-        return { text, engine: 'gemini' };
+        const finalText = cleanTranscribedText(fallbackResult.text);
+        const cost = calculateAudioCost(
+          'gemini',
+          'gemini-3.8-flash',
+          audioResult.durationMs,
+          finalText.length,
+          fallbackResult.usage
+        );
+
+        termLog(
+          `[STT Cost] Durasi: ${(audioResult.durationMs / 1000).toFixed(1)}s | Biaya: ${cost.formattedUsd} (${cost.formattedIdr})`,
+          'info'
+        );
+
+        return {
+          text: finalText,
+          engine: 'gemini',
+          model: 'gemini-3.8-flash',
+          costUsd: cost.costUsd,
+          costIdr: cost.costIdr,
+          formattedCost: cost.formattedUsd,
+        };
       }
     }
 
-    const text = await transcribeWithGemini(audioResult.base64, config);
-    return { text, engine: 'gemini' };
+    // Direct Gemini 3.8 Flash
+    const flashResult = await transcribeWithGemini(audioResult.base64, config);
+    const finalText = cleanTranscribedText(flashResult.text);
+    const cost = calculateAudioCost(
+      'gemini',
+      config.geminiModel || 'gemini-3.8-flash',
+      audioResult.durationMs,
+      finalText.length,
+      flashResult.usage
+    );
+
+    termLog(
+      `[STT Cost] Durasi: ${(audioResult.durationMs / 1000).toFixed(1)}s | Biaya: ${cost.formattedUsd} (${cost.formattedIdr})`,
+      'info'
+    );
+
+    return {
+      text: finalText,
+      engine: 'gemini',
+      model: config.geminiModel || 'gemini-3.8-flash',
+      costUsd: cost.costUsd,
+      costIdr: cost.costIdr,
+      formattedCost: cost.formattedUsd,
+    };
   } else {
+    // Groq Whisper
     if (!config.groqApiKey?.trim()) {
       const err = 'Groq API Key belum diisi. Buka Pengaturan LioSpeak untuk memasukkan Groq API Key.';
       termLog(err, 'error');
       throw new Error(err);
     }
-    termLog('[STT] Mengirim audio ke Groq Whisper API...', 'info');
-    const text = await transcribeWithGroq(audioResult.blob, config);
-    termLog(`[STT] Sukses Groq Whisper: "${text}"`, 'info');
-    return { text, engine: 'groq' };
+    const groqModel = config.groqModel || 'whisper-large-v3';
+    termLog(`[STT] Mengirim audio ke Groq Whisper API (${groqModel})...`, 'info');
+    const rawText = await transcribeWithGroq(audioResult.blob, config);
+    const finalText = cleanTranscribedText(rawText);
+    const cost = calculateAudioCost('groq', groqModel, audioResult.durationMs, finalText.length);
+
+    termLog(
+      `[STT Cost] Durasi: ${(audioResult.durationMs / 1000).toFixed(1)}s | Biaya: ${cost.formattedUsd} (${cost.formattedIdr})`,
+      'info'
+    );
+
+    return {
+      text: finalText,
+      engine: 'groq',
+      model: groqModel,
+      costUsd: cost.costUsd,
+      costIdr: cost.costIdr,
+      formattedCost: cost.formattedUsd,
+    };
   }
 }
 
 /**
- * Helper to recursively search for any transcription text in a complex response object.
+ * Validates that extracted string is genuine spoken language text
+ * and NOT an API interaction ID, metadata, or internal status keyword.
  */
-function findAnyTextInObject(obj: any, maxDepth = 6): string {
-  if (!obj || maxDepth <= 0) return '';
-  if (typeof obj === 'string') return obj;
-  if (typeof obj.text === 'string' && obj.text.trim() && !obj.thought) return obj.text.trim();
-  if (typeof obj.transcript === 'string' && obj.transcript.trim()) return obj.transcript.trim();
-  if (typeof obj.output_text === 'string' && obj.output_text.trim()) return obj.output_text.trim();
+function isLikelySpeechText(str: unknown): boolean {
+  if (typeof str !== 'string') return false;
+  const trimmed = str.trim();
+  if (!trimmed) return false;
 
-  if (Array.isArray(obj)) {
-    for (const item of obj) {
-      const found = findAnyTextInObject(item, maxDepth - 1);
-      if (found) return found;
-    }
-  } else if (typeof obj === 'object') {
-    for (const [key, val] of Object.entries(obj)) {
-      if (['usage', 'metadata', 'model_invocation_token_counts', 'prompt_tokens_details'].includes(key)) {
-        continue;
-      }
-      const found = findAnyTextInObject(val, maxDepth - 1);
-      if (found) return found;
-    }
+  // Reject Google Interaction IDs: e.g. "v1_ChdSQTdGYXU3QUw1LUtqdU1QZ3MtRzBBMBIXUkE3RmF1N0FMNS1LanVNUGdzLUcwQTA"
+  if (/^v\d+_[A-Za-z0-9_-]+$/.test(trimmed)) {
+    termLog(`[STT Filter] Menolak string ID API internal: "${trimmed}"`, 'warn');
+    return false;
   }
-  return '';
+
+  // Reject internal status keywords or JSON blobs
+  const lower = trimmed.toLowerCase();
+  if (['completed', 'in_progress', 'failed', 'cancelled', 'null', 'undefined', '{}', '[]'].includes(lower)) {
+    return false;
+  }
+
+  return true;
 }
 
 /**
- * Extracts transcribed text from the Interactions API or general JSON response.
+ * Extracts transcribed text strictly from known text payload fields.
+ * NEVER blindly returns top-level object fields like `id` or `status`.
  */
 function extractTextFromInteractionResponse(data: any): string {
-  if (!data) return '';
-  if (typeof data === 'string') return data;
-  if (typeof data.text === 'string' && data.text.trim()) return data.text.trim();
-  if (typeof data.output_text === 'string' && data.output_text.trim()) return data.output_text.trim();
-  if (typeof data.transcript === 'string' && data.transcript.trim()) return data.transcript.trim();
-  if (typeof data.result?.text === 'string' && data.result.text.trim()) return data.result.text.trim();
-  if (typeof data.result?.transcript === 'string' && data.result.transcript.trim()) return data.result.transcript.trim();
-  if (typeof data.output?.text === 'string' && data.output.text.trim()) return data.output.text.trim();
-  if (typeof data.model_output?.text === 'string' && data.model_output.text.trim()) return data.model_output.text.trim();
+  if (!data || typeof data !== 'object') return '';
 
-  // Interactions API: check `steps` array
+  // 1. Direct text fields
+  if (isLikelySpeechText(data.output_text)) return data.output_text.trim();
+  if (isLikelySpeechText(data.transcript)) return data.transcript.trim();
+  if (isLikelySpeechText(data.result?.text)) return data.result.text.trim();
+  if (isLikelySpeechText(data.result?.transcript)) return data.result.transcript.trim();
+  if (isLikelySpeechText(data.model_output?.text)) return data.model_output.text.trim();
+
+  // 2. Interactions API: `steps` array
   if (Array.isArray(data.steps)) {
     const collected: string[] = [];
     for (const step of data.steps) {
-      if (typeof step === 'string') {
-        collected.push(step);
-      } else if (step) {
-        if (typeof step.text === 'string' && step.text.trim()) {
-          collected.push(step.text.trim());
+      if (!step) continue;
+      if (isLikelySpeechText(step.text)) {
+        collected.push(step.text.trim());
+      }
+      if (isLikelySpeechText(step.output_text)) {
+        collected.push(step.output_text.trim());
+      }
+      if (step.model_output) {
+        if (isLikelySpeechText(step.model_output.text)) {
+          collected.push(step.model_output.text.trim());
         }
-        if (typeof step.output === 'string' && step.output.trim()) {
-          collected.push(step.output.trim());
-        }
-        if (typeof step.output_text === 'string' && step.output_text.trim()) {
-          collected.push(step.output_text.trim());
-        }
-        if (step.model_output) {
-          if (typeof step.model_output.text === 'string') {
-            collected.push(step.model_output.text.trim());
-          }
-          if (Array.isArray(step.model_output.content)) {
-            for (const item of step.model_output.content) {
-              if (typeof item === 'string') collected.push(item);
-              else if (item?.text && !item.thought) collected.push(item.text);
+        if (Array.isArray(step.model_output.content)) {
+          for (const item of step.model_output.content) {
+            if (isLikelySpeechText(item?.text) && !item.thought) {
+              collected.push(item.text.trim());
             }
           }
         }
-        if (Array.isArray(step.content)) {
-          for (const item of step.content) {
-            if (typeof item === 'string') collected.push(item);
-            else if (item?.text && !item.thought) collected.push(item.text);
+      }
+      if (Array.isArray(step.content)) {
+        for (const item of step.content) {
+          if (isLikelySpeechText(item?.text) && !item.thought) {
+            collected.push(item.text.trim());
           }
         }
       }
     }
     const joined = collected.filter(Boolean).join(' ').trim();
-    if (joined) return joined;
+    if (joined && isLikelySpeechText(joined)) return joined;
   }
 
-  // Check `candidates` array
+  // 3. Standard `candidates` array
   if (Array.isArray(data.candidates)) {
     const collected: string[] = [];
     for (const c of data.candidates) {
       const parts = c?.content?.parts || [];
       for (const p of parts) {
-        if (!p.thought && typeof p?.text === 'string') {
-          collected.push(p.text);
+        if (!p.thought && isLikelySpeechText(p?.text)) {
+          collected.push(p.text.trim());
         }
       }
     }
     const joined = collected.filter(Boolean).join(' ').trim();
-    if (joined) return joined;
+    if (joined && isLikelySpeechText(joined)) return joined;
   }
 
-  // Check `outputs` array (legacy)
+  // 4. Outputs array
   if (Array.isArray(data.outputs)) {
     for (const out of data.outputs) {
-      if (typeof out.text === 'string' && out.text.trim()) return out.text.trim();
-      if (typeof out.content === 'string' && out.content.trim()) return out.content.trim();
+      if (isLikelySpeechText(out?.text)) return out.text.trim();
+      if (isLikelySpeechText(out?.transcript)) return out.transcript.trim();
     }
   }
 
-  // Fallback: deep scan object
-  return findAnyTextInObject(data);
+  return '';
 }
 
 /**
@@ -180,7 +267,7 @@ export async function transcribeWithGemini35(
   _audioBlob: Blob,
   audioBase64: string,
   config: AppConfig
-): Promise<string> {
+): Promise<InternalGeminiResult> {
   const apiKey = config.geminiApiKey.trim();
 
   // Method 1: Try Interactions API with direct audio payload
@@ -209,14 +296,25 @@ export async function transcribeWithGemini35(
       const data = await res.json();
       termLog(`[Gemini 3.5 Interactions Response]: ${JSON.stringify(data).slice(0, 1000)}`, 'info');
       const text = extractTextFromInteractionResponse(data);
+
+      let usage: InternalGeminiResult['usage'] = undefined;
+      if (data.usage) {
+        usage = {
+          total_input_tokens: data.usage.total_input_tokens,
+          total_output_tokens: data.usage.total_output_tokens,
+          audio_tokens: data.usage.input_tokens_by_modality?.find((m: any) => m.modality === 'audio')?.tokens,
+        };
+      }
+
       if (text) {
         termLog(`[Gemini 3.5 Parsed Text]: "${text}"`, 'info');
-        return cleanTranscribedText(text);
+        return { text: cleanTranscribedText(text), usage };
       } else {
         termLog(
-          `[Gemini 3.5] Response JSON tidak mengandung field teks yang dikenal. Response keys: ${Object.keys(data).join(', ')}`,
-          'warn'
+          `[Gemini 3.5] Audio kosong / tidak mengandung kata terucap.`,
+          'info'
         );
+        return { text: '', usage };
       }
     } else {
       const errBody = await res.text();
@@ -229,54 +327,48 @@ export async function transcribeWithGemini35(
   // Method 2: Try generateContent with gemini-3.5-transcribe
   try {
     termLog('[STT] Mencoba transcribe via gemini-3.5-transcribe:generateContent...', 'info');
-    const text = await transcribeWithGemini(audioBase64, {
+    const result = await transcribeWithGemini(audioBase64, {
       ...config,
       geminiModel: 'gemini-3.5-transcribe',
     });
-    if (text && text.trim()) {
-      return text;
+    if (result.text && result.text.trim()) {
+      return result;
     }
   } catch (e) {
     termLog(`gemini-3.5-transcribe generateContent attempt error: ${e}`, 'warn');
   }
 
-  // Method 3: Fallback to Gemini 3.8 Flash (Google's flagship audio model)
-  termLog('[STT] Menggunakan Gemini 3.8 Flash multimodal audio engine...', 'info');
-  return transcribeWithGemini(audioBase64, {
-    ...config,
-    geminiModel: 'gemini-3.8-flash',
-  });
+  return { text: '' };
 }
 
 /**
- * Calls Gemini with raw audio data and custom system prompt.
+ * Transcribes audio via standard Gemini generateContent multimodal endpoint.
  */
 export async function transcribeWithGemini(
   audioBase64: string,
   config: AppConfig
-): Promise<string> {
-  // Alias deprecated models to gemini-3.8-flash
-  let model = config.geminiModel || 'gemini-3.8-flash';
-  if (model === 'gemini-2.0-flash' || model === 'gemini-2.5-flash') {
-    model = 'gemini-3.8-flash';
-  }
+): Promise<InternalGeminiResult> {
+  const model =
+    config.geminiModel === 'gemini-2.0-flash' || config.geminiModel === 'gemini-2.5-flash'
+      ? 'gemini-3.8-flash'
+      : config.geminiModel || 'gemini-3.8-flash';
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(
     config.geminiApiKey.trim()
   )}`;
 
-  const promptText = `${config.systemPrompt || 'Transcribe the spoken audio cleanly.'}\nLanguage preference: ${
-    config.language === 'id' ? 'Bahasa Indonesia' : config.language === 'en' ? 'English' : 'Indonesian / English auto-detect'
-  }`;
+  const prompt =
+    config.systemPrompt ||
+    `Transcribe the audio speech accurately into clean, well-punctuated text. ` +
+    `Support Indonesian, English, and natural Indonesian-English code-switching. ` +
+    `Output ONLY the transcribed spoken words, with no conversational remarks or extra commentary.`;
 
   const payload = {
     contents: [
       {
         role: 'user',
         parts: [
-          {
-            text: promptText,
-          },
+          { text: prompt },
           {
             inlineData: {
               mimeType: 'audio/wav',
@@ -287,12 +379,11 @@ export async function transcribeWithGemini(
       },
     ],
     generationConfig: {
-      temperature: 0.0,
-      maxOutputTokens: 1024,
+      temperature: 0.1,
+      topP: 0.95,
+      maxOutputTokens: 2048,
     },
   };
-
-  termLog(`[Gemini API Request] Mengirim ke model "${model}" (${(audioBase64.length / 1024).toFixed(1)} KB base64)...`, 'info');
 
   const response = await fetch(url, {
     method: 'POST',
@@ -321,31 +412,28 @@ export async function transcribeWithGemini(
   const data = await response.json();
   termLog(`[Gemini API Response] ${JSON.stringify(data).slice(0, 800)}`, 'info');
 
-  if (data?.promptFeedback?.blockReason) {
-    termLog(`[Gemini API Prompt Blocked] Alasan: ${data.promptFeedback.blockReason}`, 'warn');
-  }
-  if (data?.candidates?.[0]?.finishReason && data?.candidates?.[0]?.finishReason !== 'STOP') {
-    termLog(`[Gemini API Finish Reason] ${data.candidates[0].finishReason}`, 'info');
+  let usage: InternalGeminiResult['usage'] = undefined;
+  if (data.usageMetadata) {
+    usage = {
+      total_input_tokens: data.usageMetadata.promptTokenCount,
+      total_output_tokens: data.usageMetadata.candidatesTokenCount,
+    };
   }
 
   // Parse all text parts (ignoring thoughts if present)
   const parts = data?.candidates?.[0]?.content?.parts || [];
   let rawText = '';
   for (const part of parts) {
-    if (typeof part.text === 'string' && !part.thought) {
+    if (typeof part.text === 'string' && !part.thought && isLikelySpeechText(part.text)) {
       rawText += part.text + ' ';
     }
-  }
-
-  if (!rawText.trim() && parts.length > 0) {
-    rawText = parts[parts.length - 1]?.text || '';
   }
 
   if (!rawText.trim()) {
     rawText = extractTextFromInteractionResponse(data);
   }
 
-  return cleanTranscribedText(rawText);
+  return { text: cleanTranscribedText(rawText), usage };
 }
 
 /**
@@ -403,6 +491,7 @@ export async function transcribeWithGroq(
  * Cleans quotation marks and excess whitespace from model output.
  */
 function cleanTranscribedText(text: string): string {
+  if (!isLikelySpeechText(text)) return '';
   let cleaned = text.trim();
   // Strip surrounding quotes if the model enclosed output in quotes
   if (

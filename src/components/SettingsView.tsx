@@ -14,6 +14,11 @@ import {
   Radio,
   Minimize2,
   RotateCw,
+  Coins,
+  BarChart3,
+  RotateCcw,
+  DollarSign,
+  Wallet,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { openUrl } from '@tauri-apps/plugin-opener';
@@ -22,8 +27,10 @@ import {
   loadConfig,
   saveConfig,
   clearHistory,
+  resetLifetimeStats,
 } from '../services/configStore';
 import { dictationCoordinator } from '../services/shortcutManager';
+import { formatUsd, formatIdr } from '../services/costCalculator';
 
 const SHORTCUT_PRESETS = [
   { label: 'Cmd/Ctrl + Shift + Space (Bawaan)', value: 'CommandOrControl+Shift+Space' },
@@ -58,7 +65,7 @@ Keluarkan HANYA hasil teks transkripsi tanpa komentar tambahan.`,
 
 export const SettingsView: React.FC = () => {
   const [config, setConfig] = useState<AppConfig>(loadConfig());
-  const [activeTab, setActiveTab] = useState<'shortcut' | 'engine' | 'prompt' | 'history'>('shortcut');
+  const [activeTab, setActiveTab] = useState<'shortcut' | 'engine' | 'prompt' | 'history' | 'costs'>('shortcut');
   const [showApiKey, setShowApiKey] = useState(false);
   const [testState, setTestState] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
   const [testMsg, setTestMsg] = useState('');
@@ -294,6 +301,13 @@ export const SettingsView: React.FC = () => {
           >
             <Settings size={18} />
             <span>Gaya Penulisan</span>
+          </button>
+          <button
+            className={`nav-item ${activeTab === 'costs' ? 'active' : ''}`}
+            onClick={() => setActiveTab('costs')}
+          >
+            <Coins size={18} />
+            <span>Biaya & Kuota</span>
           </button>
           <button
             className={`nav-item ${activeTab === 'history' ? 'active' : ''}`}
@@ -772,6 +786,41 @@ export const SettingsView: React.FC = () => {
                 )}
               </div>
 
+              {config.history?.length > 0 && (
+                <div
+                  style={{
+                    display: 'flex',
+                    gap: '12px',
+                    alignItems: 'center',
+                    marginBottom: '14px',
+                    fontSize: '12px',
+                    color: 'var(--text-muted)',
+                    background: 'var(--bg-card)',
+                    padding: '8px 14px',
+                    borderRadius: '8px',
+                    border: '1px solid var(--border)',
+                  }}
+                >
+                  <span>
+                    Total: <strong style={{ color: '#fff' }}>{config.history.length} transkripsi</strong>
+                  </span>
+                  <span>•</span>
+                  <span>
+                    Durasi:{' '}
+                    <strong style={{ color: '#fff' }}>
+                      {((config.history.reduce((a, b) => a + (b.durationMs || 0), 0)) / 1000).toFixed(1)}s
+                    </strong>
+                  </span>
+                  <span>•</span>
+                  <span>
+                    Estimasi Biaya:{' '}
+                    <strong style={{ color: '#34d399' }}>
+                      {formatUsd(config.history.reduce((a, b) => a + (b.costUsd || 0), 0))}
+                    </strong>
+                  </span>
+                </div>
+              )}
+
               {(!config.history || config.history.length === 0) ? (
                 <div className="empty-history">
                   <Clock size={40} className="empty-icon" />
@@ -792,10 +841,16 @@ export const SettingsView: React.FC = () => {
                         </span>
                         <div className="history-badges">
                           <span className={`engine-mini-badge ${item.engine}`}>
-                            {item.engine === 'gemini' ? 'Gemini 2.0' : 'Groq'}
+                            {item.model || (item.engine === 'gemini' ? 'Gemini 3.5' : 'Groq')}
                           </span>
                           <span className="duration-mini-badge">
                             {(item.durationMs / 1000).toFixed(1)}s
+                          </span>
+                          <span
+                            className="cost-mini-badge"
+                            title={`Estimasi: ${formatUsd(item.costUsd || 0)} (~${formatIdr(item.costIdr || (item.costUsd || 0) * 16000)})`}
+                          >
+                            {formatUsd(item.costUsd || 0)}
                           </span>
                           <button
                             className="btn-icon-tiny"
@@ -811,6 +866,171 @@ export const SettingsView: React.FC = () => {
                   ))}
                 </div>
               )}
+            </div>
+          )}
+
+          {/* TAB 5: COSTS & USAGE DASHBOARD */}
+          {activeTab === 'costs' && (
+            <div className="tab-pane">
+              <div className="section-title history-title-row">
+                <div>
+                  <h2>Biaya & Kuota Pemakaian</h2>
+                  <p>Pelacakan transparan estimasi biaya per dikte dan total akumulasi selama aplikasi digunakan.</p>
+                </div>
+                {(config.lifetimeCount > 0 || config.lifetimeCostUsd > 0) && (
+                  <button
+                    className="btn-danger-outline"
+                    onClick={() => {
+                      if (window.confirm('Reset seluruh penghitung statistik akumulasi biaya & durasi ke 0?')) {
+                        resetLifetimeStats();
+                        setConfig(loadConfig());
+                      }
+                    }}
+                  >
+                    <RotateCcw size={14} /> Reset Statistik
+                  </button>
+                )}
+              </div>
+
+              {/* 4 STATS METRIC CARDS */}
+              <div className="stats-grid">
+                <div className="stat-card">
+                  <div className="stat-card-header">
+                    <span>Total Estimasi Biaya</span>
+                    <DollarSign size={16} style={{ color: '#34d399' }} />
+                  </div>
+                  <div className="stat-card-val" style={{ color: '#34d399' }}>
+                    {formatUsd(config.lifetimeCostUsd || 0)}
+                  </div>
+                  <div className="stat-card-sub">
+                    ~{formatIdr((config.lifetimeCostUsd || 0) * 16000)} (Estimasi Pay-as-you-go)
+                  </div>
+                </div>
+
+                <div className="stat-card">
+                  <div className="stat-card-header">
+                    <span>Total Durasi Audio</span>
+                    <Clock size={16} style={{ color: '#60a5fa' }} />
+                  </div>
+                  <div className="stat-card-val">
+                    {Math.floor((config.lifetimeDurationMs || 0) / 60000)}m{' '}
+                    {Math.round(((config.lifetimeDurationMs || 0) % 60000) / 1000)}s
+                  </div>
+                  <div className="stat-card-sub">
+                    {((config.lifetimeDurationMs || 0) / 1000).toFixed(1)} detik suara terproses
+                  </div>
+                </div>
+
+                <div className="stat-card">
+                  <div className="stat-card-header">
+                    <span>Total Dikte Dilakukan</span>
+                    <Sparkles size={16} style={{ color: '#a78bfa' }} />
+                  </div>
+                  <div className="stat-card-val">
+                    {config.lifetimeCount || 0} kali
+                  </div>
+                  <div className="stat-card-sub">
+                    Transkripsi berhasil ke kursor
+                  </div>
+                </div>
+
+                <div className="stat-card">
+                  <div className="stat-card-header">
+                    <span>Rata-rata per Dikte</span>
+                    <Wallet size={16} style={{ color: '#fbbf24' }} />
+                  </div>
+                  <div className="stat-card-val">
+                    {config.lifetimeCount
+                      ? formatUsd((config.lifetimeCostUsd || 0) / config.lifetimeCount)
+                      : '$0.00'}
+                  </div>
+                  <div className="stat-card-sub">
+                    Sangat terjangkau (&lt; Rp 1 per kalimat)
+                  </div>
+                </div>
+              </div>
+
+              {/* FREE TIER INFO CALLOUT */}
+              <div className="card-box info-callout" style={{ marginTop: '16px' }}>
+                <Coins size={18} className="info-icon" style={{ color: '#34d399' }} />
+                <div>
+                  <strong>💡 Kuota Gratis (Free Tier) vs Pay-as-you-go:</strong>
+                  <p style={{ marginTop: '4px', fontSize: '12px', lineHeight: '1.5' }}>
+                    Google AI Studio menyediakan <strong>Free Tier</strong> gratis dengan limit 15 permintaan/menit dan 1 juta token/menit tanpa ditarik biaya ($0.00). Groq juga memberikan kuota gratis yang besar.
+                    Estimasi biaya di atas dihitung berdasarkan tarif resmi komersial provider jika Anda menggunakan tier berbayar.
+                  </p>
+                </div>
+              </div>
+
+              {/* OFFICIAL PRICING COMPARISON TABLE CARD */}
+              <div className="card-box" style={{ marginTop: '16px' }}>
+                <label className="field-label" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <BarChart3 size={16} style={{ color: 'var(--primary)' }} />
+                  <span>Daftar Tarif Resmi Penyedia AI (Official Pricing)</span>
+                </label>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '6px' }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      padding: '10px 14px',
+                      background: 'var(--bg-sidebar)',
+                      borderRadius: '8px',
+                      border: '1px solid var(--border)',
+                    }}
+                  >
+                    <div>
+                      <strong style={{ fontSize: '13px', color: '#fff' }}>Google Gemini 3.5 Transcribe</strong>
+                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
+                        Audio Input: $0.70 / 1.000.000 audio tokens (~$0.000022/detik)
+                      </p>
+                    </div>
+                    <span className="cost-mini-badge">~Rp 0.35 / detik</span>
+                  </div>
+
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      padding: '10px 14px',
+                      background: 'var(--bg-sidebar)',
+                      borderRadius: '8px',
+                      border: '1px solid var(--border)',
+                    }}
+                  >
+                    <div>
+                      <strong style={{ fontSize: '13px', color: '#fff' }}>Google Gemini 3.8 Flash</strong>
+                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
+                        Audio Input: $0.70 / 1.000.000 audio tokens | Output: $0.40 / 1.000.000 tokens
+                      </p>
+                    </div>
+                    <span className="cost-mini-badge">~Rp 0.35 / detik</span>
+                  </div>
+
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      padding: '10px 14px',
+                      background: 'var(--bg-sidebar)',
+                      borderRadius: '8px',
+                      border: '1px solid var(--border)',
+                    }}
+                  >
+                    <div>
+                      <strong style={{ fontSize: '13px', color: '#fff' }}>Groq Whisper Large v3</strong>
+                      <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '2px 0 0 0' }}>
+                        Tarif Audio: $0.111 per jam audio (~$0.0000308/detik)
+                      </p>
+                    </div>
+                    <span className="cost-mini-badge">~Rp 0.49 / detik</span>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
         </main>

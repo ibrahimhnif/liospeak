@@ -13,6 +13,9 @@ export interface DictationStatusEvent {
   text?: string;
   error?: string;
   volume?: number;
+  durationMs?: number;
+  costUsd?: number;
+  formattedCost?: string;
 }
 
 class DictationCoordinator {
@@ -271,11 +274,20 @@ class DictationCoordinator {
         text: finalText,
         timestamp: Date.now(),
         engine: sttResult.engine,
+        model: sttResult.model,
         durationMs: recordResult.durationMs,
+        costUsd: sttResult.costUsd,
+        costIdr: sttResult.costIdr,
       });
 
       // 3. Show success status on overlay
-      await this.broadcastStatus({ state: 'done', text: finalText });
+      await this.broadcastStatus({
+        state: 'done',
+        text: finalText,
+        durationMs: recordResult.durationMs,
+        costUsd: sttResult.costUsd,
+        formattedCost: sttResult.formattedCost,
+      });
 
       // 4. Auto-hide overlay after 1.8 seconds
       setTimeout(async () => {
