@@ -33,6 +33,13 @@ export class AudioRecorder {
     this.pcmBuffers = [];
     this.startTime = Date.now();
 
+    // Validate microphone availability
+    if (!navigator || !navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+      throw new Error(
+        'Akses mikrofon belum aktif atau belum diizinkan oleh sistem. Pastikan izin mikrofon telah diberikan di System Settings -> Privacy & Security -> Microphone.'
+      );
+    }
+
     // Request microphone access
     this.mediaStream = await navigator.mediaDevices.getUserMedia({
       audio: {
