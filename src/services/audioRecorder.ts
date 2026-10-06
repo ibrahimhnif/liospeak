@@ -248,9 +248,8 @@ export class AudioRecorder {
     const downsampled = downsampleBuffer(merged, inputSampleRate, 16000);
     termLog(`Downsampled to 16000Hz: ${downsampled.length} samples`, 'info');
 
-    // Encode to 16kHz 16-bit Mono WAV
-    const wavBlob = encodeWAV(downsampled, 16000);
-    const base64 = await blobToBase64(wavBlob);
+    // Encode to 16kHz 16-bit Mono WAV & instant Base64
+    const { blob: wavBlob, base64 } = encodeWAV(downsampled, 16000);
 
     termLog(`WAV Blob berhasil di-generate! Ukuran: ${(wavBlob.size / 1024).toFixed(1)} KB`, 'info');
 
@@ -306,9 +305,9 @@ function downsampleBuffer(buffer: Float32Array, inputRate: number, outputRate: n
 }
 
 /**
- * Encodes Float32Array PCM samples into a standard 16-bit Mono WAV Blob.
+ * Encodes Float32Array PCM samples into a standard 16-bit Mono WAV Blob and Base64 string instantly.
  */
-function encodeWAV(samples: Float32Array, sampleRate: number): Blob {
+function encodeWAV(samples: Float32Array, sampleRate: number): { blob: Blob; base64: string } {
   const buffer = new ArrayBuffer(44 + samples.length * 2);
   const view = new DataView(buffer);
 
@@ -340,7 +339,10 @@ function encodeWAV(samples: Float32Array, sampleRate: number): Blob {
     offset += 2;
   }
 
-  return new Blob([buffer], { type: 'audio/wav' });
+  const blob = new Blob([buffer], { type: 'audio/wav' });
+  const base64 = arrayBufferToBase64(buffer);
+
+  return { blob, base64 };
 }
 
 function writeString(view: DataView, offset: number, string: string): void {
@@ -349,15 +351,20 @@ function writeString(view: DataView, offset: number, string: string): void {
   }
 }
 
-function blobToBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const dataUrl = reader.result as string;
-      const base64 = dataUrl.split(',')[1] || '';
-      resolve(base64);
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
+/**
+ * Super-fast ArrayBuffer to Base64 encoder without FileReader overhead.
+ */
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const len = bytes.byteLength;
+  const chunkSize = 0x8000;
+  for (let i = 0; i < len; i += chunkSize) {
+    binary += String.fromCharCode.apply(
+      null,
+      bytes.subarray(i, Math.min(i + chunkSize, len)) as unknown as number[]
+    );
+  }
+  return btoa(binary);
 }
+

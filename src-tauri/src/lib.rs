@@ -38,9 +38,60 @@ fn paste_text(app: AppHandle, text: String) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+extern "C" {
+    fn start_mac_fn_listener(callback: extern "C" fn(i32));
+    fn stop_mac_fn_listener();
+    fn get_mac_cursor_pos(
+        out_x: *mut f64,
+        out_y: *mut f64,
+        out_screen_w: *mut f64,
+        out_screen_h: *mut f64,
+    );
+}
+
 #[tauri::command]
 fn show_overlay(app: AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("overlay") {
+        #[cfg(target_os = "macos")]
+        {
+            let mut cur_x = 0.0f64;
+            let mut cur_y = 0.0f64;
+            let mut screen_w = 1920.0f64;
+            let mut screen_h = 1080.0f64;
+            unsafe {
+                get_mac_cursor_pos(
+                    &mut cur_x,
+                    &mut cur_y,
+                    &mut screen_w,
+                    &mut screen_h,
+                );
+            }
+
+            let overlay_w = 380.0f64;
+            let overlay_h = 88.0f64;
+
+            // Position centered horizontally under cursor, slightly below the mouse pointer
+            let mut target_x = cur_x - (overlay_w / 2.0);
+            let mut target_y = cur_y + 24.0;
+
+            // If too close to bottom of screen, position above the cursor
+            if target_y + overlay_h > screen_h - 20.0 {
+                target_y = (cur_y - overlay_h - 16.0).max(20.0);
+            }
+
+            // Clamp horizontally to stay inside screen bounds
+            if target_x < 16.0 {
+                target_x = 16.0;
+            } else if target_x + overlay_w > screen_w - 16.0 {
+                target_x = (screen_w - overlay_w - 16.0).max(16.0);
+            }
+
+            let _ = window.set_position(tauri::Position::Logical(tauri::LogicalPosition::new(
+                target_x, target_y,
+            )));
+        }
+
         let _ = window.show();
         let _ = window.set_always_on_top(true);
     }
@@ -76,12 +127,6 @@ use std::sync::Mutex;
 use tauri::Emitter;
 
 static APP_HANDLE: Mutex<Option<AppHandle>> = Mutex::new(None);
-
-#[cfg(target_os = "macos")]
-extern "C" {
-    fn start_mac_fn_listener(callback: extern "C" fn(i32));
-    fn stop_mac_fn_listener();
-}
 
 #[cfg(target_os = "macos")]
 extern "C" fn on_fn_key_changed(is_pressed: i32) {
