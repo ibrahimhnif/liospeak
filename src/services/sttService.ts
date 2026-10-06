@@ -19,6 +19,20 @@ export async function transcribeAudio(
         'Google Gemini API Key belum diisi. Buka Pengaturan LioSpeak untuk memasukkan API Key gratis dari Google AI Studio.'
       );
     }
+    if (config.geminiModel === 'gemini-3.5-transcribe') {
+      try {
+        const text = await transcribeWithGemini35(audioResult.blob, audioResult.base64, config);
+        return { text, engine: 'gemini' };
+      } catch (err) {
+        console.warn('Gemini 3.5 Transcribe direct API error, trying generateContent fallback:', err);
+        const text = await transcribeWithGemini(audioResult.base64, {
+          ...config,
+          geminiModel: 'gemini-2.0-flash',
+        });
+        return { text, engine: 'gemini' };
+      }
+    }
+
     const text = await transcribeWithGemini(audioResult.base64, config);
     return { text, engine: 'gemini' };
   } else {
@@ -30,6 +44,89 @@ export async function transcribeAudio(
     const text = await transcribeWithGroq(audioResult.blob, config);
     return { text, engine: 'groq' };
   }
+}
+
+/**
+ * Dedicated transcription using Gemini 3.5 Transcribe.
+ */
+export async function transcribeWithGemini35(
+  audioBlob: Blob,
+  audioBase64: string,
+  config: AppConfig
+): Promise<string> {
+  const apiKey = config.geminiApiKey.trim();
+
+  // Method 1: Try Interactions API with direct audio payload
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/interactions?key=${encodeURIComponent(apiKey)}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gemini-3.5-transcribe',
+        input: [
+          {
+            type: 'audio',
+            data: audioBase64,
+            mime_type: 'audio/wav',
+          },
+        ],
+      }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      const text = data?.result?.text || data?.text || data?.transcript;
+      if (text) return cleanTranscribedText(text);
+    }
+  } catch (e) {
+    console.warn('Interactions inline attempt:', e);
+  }
+
+  // Method 2: Files API upload then interactions call
+  try {
+    const uploadUrl = `https://generativelanguage.googleapis.com/upload/v1beta/files?key=${encodeURIComponent(apiKey)}`;
+    const uploadRes = await fetch(uploadUrl, {
+      method: 'POST',
+      headers: {
+        'X-Goog-Upload-Command': 'upload, finalize',
+        'X-Goog-Upload-Header-Content-Length': `${audioBlob.size}`,
+        'X-Goog-Upload-Header-Content-Type': 'audio/wav',
+        'Content-Type': 'audio/wav',
+      },
+      body: audioBlob,
+    });
+
+    if (uploadRes.ok) {
+      const uploadData = await uploadRes.json();
+      const uri = uploadData?.file?.uri || uploadData?.uri;
+      if (uri) {
+        const interactUrl = `https://generativelanguage.googleapis.com/v1beta/interactions?key=${encodeURIComponent(apiKey)}`;
+        const interactRes = await fetch(interactUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'gemini-3.5-transcribe',
+            input: [{ type: 'audio', uri }],
+          }),
+        });
+
+        if (interactRes.ok) {
+          const interactData = await interactRes.json();
+          const text = interactData?.result?.text || interactData?.text || interactData?.transcript;
+          if (text) return cleanTranscribedText(text);
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('Files API upload failed:', e);
+  }
+
+  // Method 3: generateContent with gemini-3.5-transcribe
+  return transcribeWithGemini(audioBase64, {
+    ...config,
+    geminiModel: 'gemini-3.5-transcribe',
+  });
 }
 
 /**

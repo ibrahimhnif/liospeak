@@ -38,7 +38,7 @@ Rules:
 const DEFAULT_CONFIG: AppConfig = {
   engine: 'gemini',
   geminiApiKey: '',
-  geminiModel: 'gemini-2.0-flash',
+  geminiModel: 'gemini-3.5-transcribe',
   groqApiKey: '',
   groqModel: 'whisper-large-v3',
   shortcut: 'CommandOrControl+Shift+Space',

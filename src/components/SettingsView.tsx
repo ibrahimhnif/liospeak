@@ -312,16 +312,16 @@ export const SettingsView: React.FC = () => {
                   className={`engine-card ${config.engine === 'gemini' ? 'selected' : ''}`}
                   onClick={() => updateConfig({ engine: 'gemini' })}
                 >
-                  <div className="engine-card-badge">Paling Cerdas & Hemat</div>
+                  <div className="engine-card-badge">Paling Baru & Akurat</div>
                   <div className="engine-card-header">
                     <Sparkles size={20} className="engine-icon gemini" />
                     <div>
-                      <h3>Google Gemini 2.0 Flash</h3>
-                      <span className="price-tag">Gratis 15 RPM / ~Rp 1.100 per jam</span>
+                      <h3>Google Gemini 3.5 Transcribe</h3>
+                      <span className="price-tag">Dedicated Speech-to-Text / Free Tier</span>
                     </div>
                   </div>
                   <p className="engine-desc">
-                    Memahami bahasa gaul Indo + slang Inggris, otomatis merapikan tanda baca & kapitalisasi, serta membuang kata gumam (*"um"*, *"eh"*).
+                    Model khusus transkripsi dari Google: otomatis membuang filler kata gumam (*"um"*, *"eh"*), memperbaiki koreksi diri (*"hari Selasa, eh bukan, Rabu"*), dan sangat akurat untuk campuran Indo-Inggris.
                   </p>
                 </div>
 
@@ -343,6 +343,33 @@ export const SettingsView: React.FC = () => {
                   </p>
                 </div>
               </div>
+
+              {/* GEMINI MODEL SELECTOR (IF GEMINI SELECTED) */}
+              {config.engine === 'gemini' && (
+                <div className="card-box">
+                  <label className="field-label">Varian Model Gemini</label>
+                  <div className="shortcut-presets-grid">
+                    <button
+                      className={`btn-chip ${config.geminiModel === 'gemini-3.5-transcribe' ? 'selected' : ''}`}
+                      onClick={() => updateConfig({ geminiModel: 'gemini-3.5-transcribe' })}
+                    >
+                      Gemini 3.5 Transcribe (Model Khusus STT)
+                    </button>
+                    <button
+                      className={`btn-chip ${config.geminiModel === 'gemini-2.0-flash' ? 'selected' : ''}`}
+                      onClick={() => updateConfig({ geminiModel: 'gemini-2.0-flash' })}
+                    >
+                      Gemini 2.0 Flash (Multimodal)
+                    </button>
+                    <button
+                      className={`btn-chip ${config.geminiModel === 'gemini-2.5-flash' ? 'selected' : ''}`}
+                      onClick={() => updateConfig({ geminiModel: 'gemini-2.5-flash' })}
+                    >
+                      Gemini 2.5 Flash
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* API KEY INPUT */}
               <div className="card-box">
