@@ -1,12 +1,10 @@
-/**
- * AudioRecorder provides high-fidelity 16kHz mono WAV recording
- * optimized for Speech-to-Text engines (Gemini & Whisper).
- */
+import { termLog } from './logger';
 
 export interface AudioRecordResult {
   blob: Blob;
   base64: string;
   durationMs: number;
+  sampleRate: number;
 }
 
 export class AudioRecorder {
@@ -14,9 +12,11 @@ export class AudioRecorder {
   private audioContext: AudioContext | null = null;
   private processor: ScriptProcessorNode | null = null;
   private inputNode: MediaStreamAudioSourceNode | null = null;
+  private muteNode: GainNode | null = null;
   private pcmBuffers: Float32Array[] = [];
   private recording = false;
   private startTime = 0;
+  private chunkCount = 0;
   private onVolumeChange?: (volume: number) => void;
 
   constructor(onVolumeChange?: (volume: number) => void) {
@@ -30,33 +30,53 @@ export class AudioRecorder {
   public async start(): Promise<void> {
     if (this.recording) return;
 
+    termLog('Memulai AudioRecorder...', 'info');
     this.pcmBuffers = [];
+    this.chunkCount = 0;
     this.startTime = Date.now();
 
-    // Validate microphone availability
+    // 1. Validate navigator.mediaDevices
     if (!navigator || !navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
-      throw new Error(
-        'Akses mikrofon belum aktif atau belum diizinkan oleh sistem. Pastikan izin mikrofon telah diberikan di System Settings -> Privacy & Security -> Microphone.'
-      );
+      const err = 'Akses mikrofon tidak didukung atau diblokir oleh sistem macOS. Pastikan izin mikrofon diberikan di System Settings -> Privacy & Security -> Microphone.';
+      termLog(err, 'error');
+      throw new Error(err);
     }
 
-    // Request microphone access
-    this.mediaStream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        channelCount: 1,
-        sampleRate: 16000,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-    });
+    // 2. Request user media (mic stream)
+    try {
+      termLog('Meminta izin stream mikrofon via getUserMedia...', 'info');
+      this.mediaStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+    } catch (err: unknown) {
+      const msg = `Gagal mendapatkan akses mikrofon: ${err instanceof Error ? err.message : String(err)}`;
+      termLog(msg, 'error');
+      throw new Error(msg);
+    }
 
-    // Create 16kHz AudioContext
+    const tracks = this.mediaStream.getAudioTracks();
+    termLog(`Mikrofon terhubung! Track count: ${tracks.length}, label: "${tracks[0]?.label}", readyState: ${tracks[0]?.readyState}`, 'info');
+
+    // 3. Create AudioContext (match hardware rate to prevent WebKit distortion)
     const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    this.audioContext = new AudioCtx({ sampleRate: 16000 });
+    this.audioContext = new AudioCtx();
+    termLog(`AudioContext dibuat! Hardware sampleRate: ${this.audioContext.sampleRate}Hz, state: ${this.audioContext.state}`, 'info');
+
+    // WebKit often starts in 'suspended' state without user click. Must resume!
+    if (this.audioContext.state === 'suspended') {
+      termLog('AudioContext dalam status "suspended", memanggil audioContext.resume()...', 'info');
+      await this.audioContext.resume();
+      termLog(`AudioContext setelah resume: status = ${this.audioContext.state}`, 'info');
+    }
+
     this.inputNode = this.audioContext.createMediaStreamSource(this.mediaStream);
 
-    // Buffer size 4096 gives ~0.25s chunks at 16kHz
+    // 4. Create ScriptProcessorNode (buffer size 4096)
     this.processor = this.audioContext.createScriptProcessor(4096, 1, 1);
 
     this.processor.onaudioprocess = (e) => {
@@ -66,38 +86,57 @@ export class AudioRecorder {
       const copy = new Float32Array(input.length);
       copy.set(input);
       this.pcmBuffers.push(copy);
+      this.chunkCount++;
 
       // Calculate RMS for visual volume meter
+      let sum = 0;
+      for (let i = 0; i < input.length; i++) {
+        sum += input[i] * input[i];
+      }
+      const rms = Math.sqrt(sum / input.length);
+      const normalized = Math.min(1.0, rms * 5.0);
+
+      if (this.chunkCount % 5 === 1) {
+        termLog(`[Perekaman] Chunk #${this.chunkCount} diterima: ${input.length} samples, RMS volume: ${normalized.toFixed(3)}`, 'log');
+      }
+
       if (this.onVolumeChange) {
-        let sum = 0;
-        for (let i = 0; i < input.length; i++) {
-          sum += input[i] * input[i];
-        }
-        const rms = Math.sqrt(sum / input.length);
-        // Normalize roughly between 0.0 and 1.0
-        const normalized = Math.min(1.0, rms * 4.0);
         this.onVolumeChange(normalized);
       }
     };
 
+    // 5. Connect through zero-gain node to destination to avoid speaker feedback while keeping processor active
+    this.muteNode = this.audioContext.createGain();
+    this.muteNode.gain.value = 0.0;
+
     this.inputNode.connect(this.processor);
-    this.processor.connect(this.audioContext.destination);
+    this.processor.connect(this.muteNode);
+    this.muteNode.connect(this.audioContext.destination);
 
     this.recording = true;
+    termLog('Perekaman audio aktif berjalan!', 'info');
   }
 
   public async stop(): Promise<AudioRecordResult> {
+    termLog(`Menghentikan perekaman audio... (total chunk diterima: ${this.chunkCount})`, 'info');
+
     if (!this.recording) {
+      termLog('Stop dipanggil tapi status recording = false', 'warn');
       throw new Error('Perekam suara belum dimulai.');
     }
 
     this.recording = false;
     const durationMs = Date.now() - this.startTime;
+    const inputSampleRate = this.audioContext?.sampleRate || 44100;
 
-    // Disconnect and release audio stream
+    // Disconnect audio nodes
     if (this.processor) {
       this.processor.disconnect();
       this.processor = null;
+    }
+    if (this.muteNode) {
+      this.muteNode.disconnect();
+      this.muteNode = null;
     }
     if (this.inputNode) {
       this.inputNode.disconnect();
@@ -112,6 +151,14 @@ export class AudioRecorder {
       this.mediaStream = null;
     }
 
+    termLog(`Perekaman selesai. Durasi: ${(durationMs / 1000).toFixed(2)} detik, Buffer count: ${this.pcmBuffers.length}`, 'info');
+
+    if (this.pcmBuffers.length === 0) {
+      const err = 'Tidak ada data audio yang tertangkap (0 chunk buffer). Pastikan mikrofon berfungsi dan tidak diblokir.';
+      termLog(err, 'error');
+      throw new Error(err);
+    }
+
     // Merge PCM buffers
     let totalLength = 0;
     for (const buf of this.pcmBuffers) {
@@ -124,16 +171,40 @@ export class AudioRecorder {
       offset += buf.length;
     }
 
+    termLog(`Merged raw samples: ${merged.length} pada ${inputSampleRate}Hz`, 'info');
+
+    // Downsample to 16000Hz (standard STT sample rate)
+    const downsampled = downsampleBuffer(merged, inputSampleRate, 16000);
+    termLog(`Downsampled to 16000Hz: ${downsampled.length} samples`, 'info');
+
     // Encode to 16kHz 16-bit Mono WAV
-    const wavBlob = encodeWAV(merged, 16000);
+    const wavBlob = encodeWAV(downsampled, 16000);
     const base64 = await blobToBase64(wavBlob);
+
+    termLog(`WAV Blob berhasil di-generate! Ukuran: ${(wavBlob.size / 1024).toFixed(1)} KB`, 'info');
 
     return {
       blob: wavBlob,
       base64,
       durationMs,
+      sampleRate: 16000,
     };
   }
+}
+
+/**
+ * Resamples Float32Array from inputRate to outputRate.
+ */
+function downsampleBuffer(buffer: Float32Array, inputRate: number, outputRate: number): Float32Array {
+  if (inputRate === outputRate) return buffer;
+  const ratio = inputRate / outputRate;
+  const newLength = Math.round(buffer.length / ratio);
+  const result = new Float32Array(newLength);
+  for (let i = 0; i < newLength; i++) {
+    const originalIndex = Math.floor(i * ratio);
+    result[i] = buffer[originalIndex] || 0;
+  }
+  return result;
 }
 
 /**
@@ -150,13 +221,13 @@ function encodeWAV(samples: Float32Array, sampleRate: number): Blob {
 
   // fmt subchunk
   writeString(view, 12, 'fmt ');
-  view.setUint32(16, 16, true); // Subchunk1Size (16 for PCM)
-  view.setUint16(20, 1, true); // AudioFormat (1 = PCM)
-  view.setUint16(22, 1, true); // NumChannels (1 = Mono)
-  view.setUint32(24, sampleRate, true); // SampleRate
-  view.setUint32(28, sampleRate * 2, true); // ByteRate (SampleRate * NumChannels * BitsPerSample/8)
-  view.setUint16(32, 2, true); // BlockAlign (NumChannels * BitsPerSample/8)
-  view.setUint16(34, 16, true); // BitsPerSample (16 bits)
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 1, true); // Mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
 
   // data subchunk
   writeString(view, 36, 'data');
@@ -165,9 +236,7 @@ function encodeWAV(samples: Float32Array, sampleRate: number): Blob {
   // Write PCM 16-bit samples
   let offset = 44;
   for (let i = 0; i < samples.length; i++) {
-    // Clamp to [-1.0, 1.0]
     const s = Math.max(-1, Math.min(1, samples[i]));
-    // Convert to 16-bit signed integer
     const val = s < 0 ? s * 0x8000 : s * 0x7fff;
     view.setInt16(offset, val, true);
     offset += 2;

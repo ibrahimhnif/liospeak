@@ -117,6 +117,17 @@ fn set_fn_listener_enabled(app: AppHandle, enabled: bool) -> Result<(), String> 
     Ok(())
 }
 
+#[tauri::command]
+fn log_to_terminal(level: String, message: String) {
+    let prefix = match level.to_lowercase().as_str() {
+        "error" => "\x1b[31m[LioSpeak ERROR]\x1b[0m",
+        "warn" => "\x1b[33m[LioSpeak WARN]\x1b[0m",
+        "info" => "\x1b[36m[LioSpeak INFO]\x1b[0m",
+        _ => "\x1b[32m[LioSpeak LOG]\x1b[0m",
+    };
+    println!("{} {}", prefix, message);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -130,7 +141,8 @@ pub fn run() {
             hide_overlay,
             hide_main_window,
             show_main_window,
-            set_fn_listener_enabled
+            set_fn_listener_enabled,
+            log_to_terminal
         ])
         .setup(|app| {
             // Build Tray Menu

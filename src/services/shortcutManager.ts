@@ -4,6 +4,7 @@ import { emit, listen } from '@tauri-apps/api/event';
 import { AudioRecorder } from './audioRecorder';
 import { transcribeAudio } from './sttService';
 import { loadConfig, addHistoryItem } from './configStore';
+import { termLog } from './logger';
 
 export type DictationState = 'idle' | 'listening' | 'transcribing' | 'done' | 'error';
 
@@ -145,41 +146,56 @@ class DictationCoordinator {
   }
 
   public async startRecording(): Promise<void> {
-    if (this.state !== 'idle') return;
+    if (this.state !== 'idle') {
+      termLog(`startRecording diabaikan karena status saat ini: ${this.state}`, 'warn');
+      return;
+    }
 
+    termLog('>>> [TRIGGER] Memulai proses dikte...', 'info');
     try {
       await invoke('show_overlay');
       await this.broadcastStatus({ state: 'listening', volume: 0 });
       await this.recorder?.start();
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : String(err);
-      console.error('Failed to start recording:', err);
+      termLog(`Gagal memulai perekaman: ${errorMsg}`, 'error');
       await this.broadcastStatus({ state: 'error', error: errorMsg });
       setTimeout(async () => {
         await invoke('hide_overlay');
         await this.broadcastStatus({ state: 'idle' });
-      }, 3000);
+      }, 3500);
     }
   }
 
   public async stopAndTranscribe(): Promise<void> {
-    if (this.state !== 'listening' || !this.recorder) return;
+    if (this.state !== 'listening' || !this.recorder) {
+      termLog(`stopAndTranscribe diabaikan karena status: ${this.state}`, 'warn');
+      return;
+    }
 
+    termLog('>>> [TRIGGER] Menghentikan rekaman & memulai transkripsi...', 'info');
     try {
       await this.broadcastStatus({ state: 'transcribing' });
       const recordResult = await this.recorder.stop();
 
+      termLog(`Audio ditangkap: durasi ${(recordResult.durationMs / 1000).toFixed(2)}s, ukuran ${(recordResult.blob.size / 1024).toFixed(1)} KB`, 'info');
+
       // Skip empty or micro recordings (<300ms)
       if (recordResult.durationMs < 300) {
+        termLog('Rekaman terlalu singkat (<300ms), diabaikan.', 'warn');
         await invoke('hide_overlay');
         await this.broadcastStatus({ state: 'idle' });
         return;
       }
 
       const config = loadConfig();
+      termLog(`Memanggil STT Engine: ${config.engine} (Model: ${config.geminiModel || 'default'})...`, 'info');
       const sttResult = await transcribeAudio(recordResult, config);
 
+      termLog(`Hasil Transkripsi Diterima: "${sttResult.text}"`, 'info');
+
       if (!sttResult.text || !sttResult.text.trim()) {
+        termLog('Teks hasil transkripsi kosong / tidak ada suara.', 'warn');
         await this.broadcastStatus({
           state: 'error',
           error: 'Tidak ada suara yang terdeteksi.',
@@ -194,7 +210,9 @@ class DictationCoordinator {
       const finalText = sttResult.text.trim();
 
       // 1. Paste text automatically to the user's active cursor
+      termLog(`Menempelkan teks ke kursor via paste_text (${finalText.length} karakter)...`, 'info');
       await invoke('paste_text', { text: finalText });
+      termLog('Teks berhasil ditempelkan ke aplikasi aktif!', 'info');
 
       // 2. Add to history
       addHistoryItem({
@@ -214,7 +232,7 @@ class DictationCoordinator {
       }, 1800);
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : String(err);
-      console.error('Transcription error:', err);
+      termLog(`Transcription / Paste error: ${errorMsg}`, 'error');
       await this.broadcastStatus({ state: 'error', error: errorMsg });
       setTimeout(async () => {
         await invoke('hide_overlay');

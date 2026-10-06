@@ -1,5 +1,6 @@
 import { AppConfig } from './configStore';
 import { AudioRecordResult } from './audioRecorder';
+import { termLog } from './logger';
 
 export interface TranscribeResult {
   text: string;
@@ -15,20 +16,26 @@ export async function transcribeAudio(
 ): Promise<TranscribeResult> {
   if (config.engine === 'gemini') {
     if (!config.geminiApiKey?.trim()) {
-      throw new Error(
-        'Google Gemini API Key belum diisi. Buka Pengaturan LioSpeak untuk memasukkan API Key gratis dari Google AI Studio.'
-      );
+      const err = 'Google Gemini API Key belum diisi. Buka Pengaturan LioSpeak untuk memasukkan API Key gratis dari Google AI Studio.';
+      termLog(err, 'error');
+      throw new Error(err);
     }
+
+    termLog(`[STT] Mempersiapkan payload audio ke Google Gemini (${config.geminiModel || 'gemini-3.5-transcribe'})...`, 'info');
+
     if (config.geminiModel === 'gemini-3.5-transcribe') {
       try {
+        termLog('[STT] Mengirim audio ke Gemini 3.5 Transcribe API...', 'info');
         const text = await transcribeWithGemini35(audioResult.blob, audioResult.base64, config);
+        termLog(`[STT] Sukses Gemini 3.5: "${text}"`, 'info');
         return { text, engine: 'gemini' };
       } catch (err) {
-        console.warn('Gemini 3.5 Transcribe direct API error, trying generateContent fallback:', err);
+        termLog(`Gemini 3.5 error (${err}), mencoba fallback ke gemini-2.0-flash...`, 'warn');
         const text = await transcribeWithGemini(audioResult.base64, {
           ...config,
           geminiModel: 'gemini-2.0-flash',
         });
+        termLog(`[STT] Sukses Fallback Gemini 2.0: "${text}"`, 'info');
         return { text, engine: 'gemini' };
       }
     }
@@ -37,11 +44,13 @@ export async function transcribeAudio(
     return { text, engine: 'gemini' };
   } else {
     if (!config.groqApiKey?.trim()) {
-      throw new Error(
-        'Groq API Key belum diisi. Buka Pengaturan LioSpeak untuk memasukkan Groq API Key.'
-      );
+      const err = 'Groq API Key belum diisi. Buka Pengaturan LioSpeak untuk memasukkan Groq API Key.';
+      termLog(err, 'error');
+      throw new Error(err);
     }
+    termLog('[STT] Mengirim audio ke Groq Whisper API...', 'info');
     const text = await transcribeWithGroq(audioResult.blob, config);
+    termLog(`[STT] Sukses Groq Whisper: "${text}"`, 'info');
     return { text, engine: 'groq' };
   }
 }
