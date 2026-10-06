@@ -59,7 +59,11 @@ export function loadConfig(): AppConfig {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULT_CONFIG;
     const parsed = JSON.parse(raw);
-    return { ...DEFAULT_CONFIG, ...parsed };
+    const config = { ...DEFAULT_CONFIG, ...parsed };
+    if (config.geminiModel === 'gemini-2.0-flash' || config.geminiModel === 'gemini-2.5-flash') {
+      config.geminiModel = 'gemini-3.8-flash';
+    }
+    return config;
   } catch (err) {
     console.error('Failed to load config from storage:', err);
     return DEFAULT_CONFIG;

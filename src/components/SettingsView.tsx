@@ -171,15 +171,18 @@ export const SettingsView: React.FC = () => {
         if (!config.geminiApiKey?.trim()) {
           throw new Error('Masukkan Gemini API Key terlebih dahulu.');
         }
-        const model = config.geminiModel || 'gemini-2.0-flash';
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(
+        const testModel = config.geminiModel === 'gemini-3.8-flash' ? 'gemini-3.8-flash' : 'gemini-3.8-flash';
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${testModel}:generateContent?key=${encodeURIComponent(
           config.geminiApiKey.trim()
         )}`;
         const res = await fetch(url, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': config.geminiApiKey.trim(),
+          },
           body: JSON.stringify({
-            contents: [{ parts: [{ text: 'Respond with the word OK.' }] }],
+            contents: [{ parts: [{ text: 'Respond with OK.' }] }],
           }),
         });
         if (!res.ok) {
@@ -187,7 +190,7 @@ export const SettingsView: React.FC = () => {
           throw new Error(err?.error?.message || `HTTP ${res.status}`);
         }
         setTestState('success');
-        setTestMsg('Koneksi Gemini 2.0 Flash berhasil terhubung!');
+        setTestMsg('Koneksi Google Gemini API berhasil terhubung!');
       } else {
         if (!config.groqApiKey?.trim()) {
           throw new Error('Masukkan Groq API Key terlebih dahulu.');
@@ -545,16 +548,10 @@ export const SettingsView: React.FC = () => {
                       Gemini 3.5 Transcribe (Model Khusus STT)
                     </button>
                     <button
-                      className={`btn-chip ${config.geminiModel === 'gemini-2.0-flash' ? 'selected' : ''}`}
-                      onClick={() => updateConfig({ geminiModel: 'gemini-2.0-flash' })}
+                      className={`btn-chip ${config.geminiModel === 'gemini-3.8-flash' ? 'selected' : ''}`}
+                      onClick={() => updateConfig({ geminiModel: 'gemini-3.8-flash' })}
                     >
-                      Gemini 2.0 Flash (Multimodal)
-                    </button>
-                    <button
-                      className={`btn-chip ${config.geminiModel === 'gemini-2.5-flash' ? 'selected' : ''}`}
-                      onClick={() => updateConfig({ geminiModel: 'gemini-2.5-flash' })}
-                    >
-                      Gemini 2.5 Flash
+                      Gemini 3.8 Flash (Multimodal Flagship Audio)
                     </button>
                   </div>
                 </div>

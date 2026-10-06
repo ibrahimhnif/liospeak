@@ -8,7 +8,7 @@ export interface TranscribeResult {
 }
 
 /**
- * Transcribes audio using either Google Gemini 2.0 Flash or Groq Whisper.
+ * Transcribes audio using either Google Gemini (Gemini 3.5 Transcribe / 3.8 Flash) or Groq Whisper.
  */
 export async function transcribeAudio(
   audioResult: AudioRecordResult,
@@ -21,31 +21,32 @@ export async function transcribeAudio(
       throw new Error(err);
     }
 
-    termLog(`[STT] Mempersiapkan payload audio ke Google Gemini (${config.geminiModel || 'gemini-3.5-transcribe'})...`, 'info');
+    const currentModel = config.geminiModel || 'gemini-3.5-transcribe';
+    termLog(`[STT] Mempersiapkan payload audio ke Google Gemini (${currentModel})...`, 'info');
 
-    if (config.geminiModel === 'gemini-3.5-transcribe') {
+    if (currentModel === 'gemini-3.5-transcribe') {
       try {
         termLog('[STT] Mengirim audio ke Gemini 3.5 Transcribe API...', 'info');
         let text = await transcribeWithGemini35(audioResult.blob, audioResult.base64, config);
-        
-        // If Gemini 3.5 returns empty string, fallback to gemini-2.0-flash!
+
+        // If Gemini 3.5 returns empty string, fallback to gemini-3.8-flash!
         if (!text || !text.trim()) {
-          termLog('[STT] Gemini 3.5 mengembalikan teks kosong, otomatis fallback ke gemini-2.0-flash...', 'warn');
+          termLog('[STT] Gemini 3.5 mengembalikan teks kosong, otomatis fallback ke gemini-3.8-flash...', 'warn');
           text = await transcribeWithGemini(audioResult.base64, {
             ...config,
-            geminiModel: 'gemini-2.0-flash',
+            geminiModel: 'gemini-3.8-flash',
           });
         }
 
         termLog(`[STT] Sukses Gemini STT: "${text}"`, 'info');
         return { text, engine: 'gemini' };
       } catch (err) {
-        termLog(`Gemini 3.5 error (${err}), mencoba fallback ke gemini-2.0-flash...`, 'warn');
+        termLog(`Gemini 3.5 error (${err}), mencoba fallback ke gemini-3.8-flash...`, 'warn');
         const text = await transcribeWithGemini(audioResult.base64, {
           ...config,
-          geminiModel: 'gemini-2.0-flash',
+          geminiModel: 'gemini-3.8-flash',
         });
-        termLog(`[STT] Sukses Fallback Gemini 2.0: "${text}"`, 'info');
+        termLog(`[STT] Sukses Fallback Gemini 3.8: "${text}"`, 'info');
         return { text, engine: 'gemini' };
       }
     }
@@ -65,47 +66,118 @@ export async function transcribeAudio(
   }
 }
 
-// Helper to parse text from Interactions API response
-function extractTextFromInteractionResponse(data: any): string {
-  if (!data) return '';
-  if (typeof data === 'string') return data;
-  if (typeof data.text === 'string' && data.text.trim()) return data.text;
-  if (typeof data.transcript === 'string' && data.transcript.trim()) return data.transcript;
-  if (typeof data.result?.text === 'string' && data.result.text.trim()) return data.result.text;
-  if (typeof data.result?.transcript === 'string' && data.result.transcript.trim()) return data.result.transcript;
-  if (typeof data.output?.text === 'string' && data.output.text.trim()) return data.output.text;
-  if (typeof data.model_output?.text === 'string' && data.model_output.text.trim()) return data.model_output.text;
-  
-  if (Array.isArray(data.outputs)) {
-    for (const out of data.outputs) {
-      if (typeof out.text === 'string' && out.text.trim()) return out.text;
-      if (typeof out.content === 'string' && out.content.trim()) return out.content;
+/**
+ * Helper to recursively search for any transcription text in a complex response object.
+ */
+function findAnyTextInObject(obj: any, maxDepth = 6): string {
+  if (!obj || maxDepth <= 0) return '';
+  if (typeof obj === 'string') return obj;
+  if (typeof obj.text === 'string' && obj.text.trim() && !obj.thought) return obj.text.trim();
+  if (typeof obj.transcript === 'string' && obj.transcript.trim()) return obj.transcript.trim();
+  if (typeof obj.output_text === 'string' && obj.output_text.trim()) return obj.output_text.trim();
+
+  if (Array.isArray(obj)) {
+    for (const item of obj) {
+      const found = findAnyTextInObject(item, maxDepth - 1);
+      if (found) return found;
     }
-  }
-  if (Array.isArray(data.steps)) {
-    for (const step of data.steps) {
-      if (typeof step.text === 'string' && step.text.trim()) return step.text;
-      if (typeof step.output === 'string' && step.output.trim()) return step.output;
-      if (step.model_output && typeof step.model_output.text === 'string' && step.model_output.text.trim()) {
-        return step.model_output.text;
+  } else if (typeof obj === 'object') {
+    for (const [key, val] of Object.entries(obj)) {
+      if (['usage', 'metadata', 'model_invocation_token_counts', 'prompt_tokens_details'].includes(key)) {
+        continue;
       }
-    }
-  }
-  if (Array.isArray(data.candidates)) {
-    for (const c of data.candidates) {
-      const parts = c?.content?.parts || [];
-      const joined = parts.filter((p: any) => !p.thought && p.text).map((p: any) => p.text).join(' ').trim();
-      if (joined) return joined;
+      const found = findAnyTextInObject(val, maxDepth - 1);
+      if (found) return found;
     }
   }
   return '';
 }
 
 /**
+ * Extracts transcribed text from the Interactions API or general JSON response.
+ */
+function extractTextFromInteractionResponse(data: any): string {
+  if (!data) return '';
+  if (typeof data === 'string') return data;
+  if (typeof data.text === 'string' && data.text.trim()) return data.text.trim();
+  if (typeof data.output_text === 'string' && data.output_text.trim()) return data.output_text.trim();
+  if (typeof data.transcript === 'string' && data.transcript.trim()) return data.transcript.trim();
+  if (typeof data.result?.text === 'string' && data.result.text.trim()) return data.result.text.trim();
+  if (typeof data.result?.transcript === 'string' && data.result.transcript.trim()) return data.result.transcript.trim();
+  if (typeof data.output?.text === 'string' && data.output.text.trim()) return data.output.text.trim();
+  if (typeof data.model_output?.text === 'string' && data.model_output.text.trim()) return data.model_output.text.trim();
+
+  // Interactions API: check `steps` array
+  if (Array.isArray(data.steps)) {
+    const collected: string[] = [];
+    for (const step of data.steps) {
+      if (typeof step === 'string') {
+        collected.push(step);
+      } else if (step) {
+        if (typeof step.text === 'string' && step.text.trim()) {
+          collected.push(step.text.trim());
+        }
+        if (typeof step.output === 'string' && step.output.trim()) {
+          collected.push(step.output.trim());
+        }
+        if (typeof step.output_text === 'string' && step.output_text.trim()) {
+          collected.push(step.output_text.trim());
+        }
+        if (step.model_output) {
+          if (typeof step.model_output.text === 'string') {
+            collected.push(step.model_output.text.trim());
+          }
+          if (Array.isArray(step.model_output.content)) {
+            for (const item of step.model_output.content) {
+              if (typeof item === 'string') collected.push(item);
+              else if (item?.text && !item.thought) collected.push(item.text);
+            }
+          }
+        }
+        if (Array.isArray(step.content)) {
+          for (const item of step.content) {
+            if (typeof item === 'string') collected.push(item);
+            else if (item?.text && !item.thought) collected.push(item.text);
+          }
+        }
+      }
+    }
+    const joined = collected.filter(Boolean).join(' ').trim();
+    if (joined) return joined;
+  }
+
+  // Check `candidates` array
+  if (Array.isArray(data.candidates)) {
+    const collected: string[] = [];
+    for (const c of data.candidates) {
+      const parts = c?.content?.parts || [];
+      for (const p of parts) {
+        if (!p.thought && typeof p?.text === 'string') {
+          collected.push(p.text);
+        }
+      }
+    }
+    const joined = collected.filter(Boolean).join(' ').trim();
+    if (joined) return joined;
+  }
+
+  // Check `outputs` array (legacy)
+  if (Array.isArray(data.outputs)) {
+    for (const out of data.outputs) {
+      if (typeof out.text === 'string' && out.text.trim()) return out.text.trim();
+      if (typeof out.content === 'string' && out.content.trim()) return out.content.trim();
+    }
+  }
+
+  // Fallback: deep scan object
+  return findAnyTextInObject(data);
+}
+
+/**
  * Dedicated transcription using Gemini 3.5 Transcribe.
  */
 export async function transcribeWithGemini35(
-  audioBlob: Blob,
+  _audioBlob: Blob,
   audioBase64: string,
   config: AppConfig
 ): Promise<string> {
@@ -135,66 +207,44 @@ export async function transcribeWithGemini35(
     termLog(`[Gemini 3.5 Interactions API HTTP Status: ${res.status}]`, 'info');
     if (res.ok) {
       const data = await res.json();
-      termLog(`[Gemini 3.5 Interactions Response] ${JSON.stringify(data).slice(0, 500)}`, 'info');
+      termLog(`[Gemini 3.5 Interactions Response]: ${JSON.stringify(data).slice(0, 1000)}`, 'info');
       const text = extractTextFromInteractionResponse(data);
-      if (text) return cleanTranscribedText(text);
+      if (text) {
+        termLog(`[Gemini 3.5 Parsed Text]: "${text}"`, 'info');
+        return cleanTranscribedText(text);
+      } else {
+        termLog(
+          `[Gemini 3.5] Response JSON tidak mengandung field teks yang dikenal. Response keys: ${Object.keys(data).join(', ')}`,
+          'warn'
+        );
+      }
     } else {
       const errBody = await res.text();
-      termLog(`[Gemini 3.5 Interactions non-OK body: ${errBody.slice(0, 300)}]`, 'warn');
+      termLog(`[Gemini 3.5 Interactions non-OK body: ${errBody.slice(0, 400)}]`, 'warn');
     }
   } catch (e) {
     termLog(`Interactions inline attempt error: ${e}`, 'warn');
   }
 
-  // Method 2: Files API upload then interactions call
+  // Method 2: Try generateContent with gemini-3.5-transcribe
   try {
-    const uploadUrl = `https://generativelanguage.googleapis.com/upload/v1beta/files?key=${encodeURIComponent(apiKey)}`;
-    const uploadRes = await fetch(uploadUrl, {
-      method: 'POST',
-      headers: {
-        'X-Goog-Upload-Command': 'upload, finalize',
-        'X-Goog-Upload-Header-Content-Length': `${audioBlob.size}`,
-        'X-Goog-Upload-Header-Content-Type': 'audio/wav',
-        'Content-Type': 'audio/wav',
-        'x-goog-api-key': apiKey,
-      },
-      body: audioBlob,
+    termLog('[STT] Mencoba transcribe via gemini-3.5-transcribe:generateContent...', 'info');
+    const text = await transcribeWithGemini(audioBase64, {
+      ...config,
+      geminiModel: 'gemini-3.5-transcribe',
     });
-
-    if (uploadRes.ok) {
-      const uploadData = await uploadRes.json();
-      const uri = uploadData?.file?.uri || uploadData?.uri;
-      if (uri) {
-        const interactUrl = `https://generativelanguage.googleapis.com/v1beta/interactions?key=${encodeURIComponent(apiKey)}`;
-        const interactRes = await fetch(interactUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-goog-api-key': apiKey,
-          },
-          body: JSON.stringify({
-            model: 'gemini-3.5-transcribe',
-            input: [{ type: 'audio', uri }],
-          }),
-        });
-
-        if (interactRes.ok) {
-          const interactData = await interactRes.json();
-          termLog(`[Gemini 3.5 Files+Interact Response] ${JSON.stringify(interactData).slice(0, 500)}`, 'info');
-          const text = extractTextFromInteractionResponse(interactData);
-          if (text) return cleanTranscribedText(text);
-        }
-      }
+    if (text && text.trim()) {
+      return text;
     }
   } catch (e) {
-    termLog(`Files API upload error: ${e}`, 'warn');
+    termLog(`gemini-3.5-transcribe generateContent attempt error: ${e}`, 'warn');
   }
 
-  // Method 3: Call gemini-2.0-flash directly as proven audio STT engine
-  termLog('[STT] Menggunakan Gemini 2.0 Flash multimodal audio engine...', 'info');
+  // Method 3: Fallback to Gemini 3.8 Flash (Google's flagship audio model)
+  termLog('[STT] Menggunakan Gemini 3.8 Flash multimodal audio engine...', 'info');
   return transcribeWithGemini(audioBase64, {
     ...config,
-    geminiModel: 'gemini-2.0-flash',
+    geminiModel: 'gemini-3.8-flash',
   });
 }
 
@@ -205,7 +255,12 @@ export async function transcribeWithGemini(
   audioBase64: string,
   config: AppConfig
 ): Promise<string> {
-  const model = config.geminiModel || 'gemini-2.0-flash';
+  // Alias deprecated models to gemini-3.8-flash
+  let model = config.geminiModel || 'gemini-3.8-flash';
+  if (model === 'gemini-2.0-flash' || model === 'gemini-2.5-flash') {
+    model = 'gemini-3.8-flash';
+  }
+
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(
     config.geminiApiKey.trim()
   )}`;
@@ -214,7 +269,6 @@ export async function transcribeWithGemini(
     config.language === 'id' ? 'Bahasa Indonesia' : config.language === 'en' ? 'English' : 'Indonesian / English auto-detect'
   }`;
 
-  // Note: Put prompt text first, audio data second
   const payload = {
     contents: [
       {
@@ -244,6 +298,7 @@ export async function transcribeWithGemini(
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      'x-goog-api-key': config.geminiApiKey.trim(),
     },
     body: JSON.stringify(payload),
   });
@@ -287,7 +342,7 @@ export async function transcribeWithGemini(
   }
 
   if (!rawText.trim()) {
-    rawText = data?.result?.text || data?.transcript || data?.text || '';
+    rawText = extractTextFromInteractionResponse(data);
   }
 
   return cleanTranscribedText(rawText);
