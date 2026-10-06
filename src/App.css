@@ -915,9 +915,17 @@ body {
   border-radius: 999px;
   padding: 8px 18px 8px 10px;
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.08);
-  min-width: 260px;
-  max-width: 360px;
-  animation: hudPop 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: border-color 0.25s ease, box-shadow 0.25s ease;
+}
+
+.hud-card.hud-state-transcribing {
+  border-color: rgba(168, 85, 247, 0.45);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6), 0 0 24px rgba(168, 85, 247, 0.25);
+}
+
+.hud-card.hud-state-done {
+  border-color: rgba(16, 185, 129, 0.45);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6), 0 0 24px rgba(16, 185, 129, 0.25);
 }
 
 @keyframes hudPop {

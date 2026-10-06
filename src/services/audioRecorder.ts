@@ -15,6 +15,7 @@ export class AudioRecorder {
   private muteNode: GainNode | null = null;
   private pcmBuffers: Float32Array[] = [];
   private recording = false;
+  private isStopping = false;
   private startPromise: Promise<void> | null = null;
   private prewarmPromise: Promise<void> | null = null;
   private startTime = 0;
@@ -136,6 +137,9 @@ export class AudioRecorder {
           this.pcmBuffers.push(copy);
           this.chunkCount++;
 
+          // Do not calculate or fire volume updates once stopping has initiated
+          if (this.isStopping) return;
+
           // Calculate RMS for visual volume meter
           let sum = 0;
           for (let i = 0; i < input.length; i++) {
@@ -165,6 +169,7 @@ export class AudioRecorder {
         this.muteNode.connect(this.audioContext.destination);
 
         this.recording = true;
+        this.isStopping = false;
         termLog('Perekaman audio aktif berjalan!', 'info');
       } finally {
         this.startPromise = null;
@@ -176,6 +181,7 @@ export class AudioRecorder {
 
   public async stop(tailPaddingMs = 350): Promise<AudioRecordResult> {
     termLog(`Menghentikan perekaman audio... (total chunk diterima: ${this.chunkCount})`, 'info');
+    this.isStopping = true;
 
     // If start is still initializing (e.g. quick tap), wait for it to finish first
     if (this.startPromise) {

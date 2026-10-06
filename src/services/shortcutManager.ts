@@ -35,7 +35,10 @@ class DictationCoordinator {
     }
 
     this.recorder = new AudioRecorder((volume) => {
-      this.broadcastStatus({ state: 'listening', volume });
+      // ONLY broadcast listening state if coordinator is currently listening
+      if (this.state === 'listening') {
+        this.broadcastStatus({ state: 'listening', volume });
+      }
     });
 
     // Automatically pre-warm mic on startup so recording is instantaneous
@@ -230,6 +233,9 @@ class DictationCoordinator {
 
       // 3. Stop audio recording with trailing grace period to ensure no cut-off syllables
       const recordResult = await this.recorder.stop(paddingMs);
+
+      // 4. Firmly maintain transcribing state in HUD during the STT network call
+      await this.broadcastStatus({ state: 'transcribing' });
 
       termLog(
         `Audio ditangkap: durasi ${(recordResult.durationMs / 1000).toFixed(2)}s, ukuran ${(recordResult.blob.size / 1024).toFixed(1)} KB`,
