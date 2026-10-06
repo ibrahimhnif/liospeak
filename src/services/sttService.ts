@@ -65,6 +65,42 @@ export async function transcribeAudio(
   }
 }
 
+// Helper to parse text from Interactions API response
+function extractTextFromInteractionResponse(data: any): string {
+  if (!data) return '';
+  if (typeof data === 'string') return data;
+  if (typeof data.text === 'string' && data.text.trim()) return data.text;
+  if (typeof data.transcript === 'string' && data.transcript.trim()) return data.transcript;
+  if (typeof data.result?.text === 'string' && data.result.text.trim()) return data.result.text;
+  if (typeof data.result?.transcript === 'string' && data.result.transcript.trim()) return data.result.transcript;
+  if (typeof data.output?.text === 'string' && data.output.text.trim()) return data.output.text;
+  if (typeof data.model_output?.text === 'string' && data.model_output.text.trim()) return data.model_output.text;
+  
+  if (Array.isArray(data.outputs)) {
+    for (const out of data.outputs) {
+      if (typeof out.text === 'string' && out.text.trim()) return out.text;
+      if (typeof out.content === 'string' && out.content.trim()) return out.content;
+    }
+  }
+  if (Array.isArray(data.steps)) {
+    for (const step of data.steps) {
+      if (typeof step.text === 'string' && step.text.trim()) return step.text;
+      if (typeof step.output === 'string' && step.output.trim()) return step.output;
+      if (step.model_output && typeof step.model_output.text === 'string' && step.model_output.text.trim()) {
+        return step.model_output.text;
+      }
+    }
+  }
+  if (Array.isArray(data.candidates)) {
+    for (const c of data.candidates) {
+      const parts = c?.content?.parts || [];
+      const joined = parts.filter((p: any) => !p.thought && p.text).map((p: any) => p.text).join(' ').trim();
+      if (joined) return joined;
+    }
+  }
+  return '';
+}
+
 /**
  * Dedicated transcription using Gemini 3.5 Transcribe.
  */
@@ -80,7 +116,10 @@ export async function transcribeWithGemini35(
     const url = `https://generativelanguage.googleapis.com/v1beta/interactions?key=${encodeURIComponent(apiKey)}`;
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': apiKey,
+      },
       body: JSON.stringify({
         model: 'gemini-3.5-transcribe',
         input: [
@@ -97,7 +136,7 @@ export async function transcribeWithGemini35(
     if (res.ok) {
       const data = await res.json();
       termLog(`[Gemini 3.5 Interactions Response] ${JSON.stringify(data).slice(0, 500)}`, 'info');
-      const text = data?.result?.text || data?.text || data?.transcript;
+      const text = extractTextFromInteractionResponse(data);
       if (text) return cleanTranscribedText(text);
     } else {
       const errBody = await res.text();
@@ -117,6 +156,7 @@ export async function transcribeWithGemini35(
         'X-Goog-Upload-Header-Content-Length': `${audioBlob.size}`,
         'X-Goog-Upload-Header-Content-Type': 'audio/wav',
         'Content-Type': 'audio/wav',
+        'x-goog-api-key': apiKey,
       },
       body: audioBlob,
     });
@@ -128,7 +168,10 @@ export async function transcribeWithGemini35(
         const interactUrl = `https://generativelanguage.googleapis.com/v1beta/interactions?key=${encodeURIComponent(apiKey)}`;
         const interactRes = await fetch(interactUrl, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': apiKey,
+          },
           body: JSON.stringify({
             model: 'gemini-3.5-transcribe',
             input: [{ type: 'audio', uri }],
@@ -138,7 +181,7 @@ export async function transcribeWithGemini35(
         if (interactRes.ok) {
           const interactData = await interactRes.json();
           termLog(`[Gemini 3.5 Files+Interact Response] ${JSON.stringify(interactData).slice(0, 500)}`, 'info');
-          const text = interactData?.result?.text || interactData?.text || interactData?.transcript;
+          const text = extractTextFromInteractionResponse(interactData);
           if (text) return cleanTranscribedText(text);
         }
       }
@@ -222,6 +265,13 @@ export async function transcribeWithGemini(
 
   const data = await response.json();
   termLog(`[Gemini API Response] ${JSON.stringify(data).slice(0, 800)}`, 'info');
+
+  if (data?.promptFeedback?.blockReason) {
+    termLog(`[Gemini API Prompt Blocked] Alasan: ${data.promptFeedback.blockReason}`, 'warn');
+  }
+  if (data?.candidates?.[0]?.finishReason && data?.candidates?.[0]?.finishReason !== 'STOP') {
+    termLog(`[Gemini API Finish Reason] ${data.candidates[0].finishReason}`, 'info');
+  }
 
   // Parse all text parts (ignoring thoughts if present)
   const parts = data?.candidates?.[0]?.content?.parts || [];
