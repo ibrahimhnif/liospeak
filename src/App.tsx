@@ -20,6 +20,14 @@ export function App() {
     }
   }, []);
 
+  useEffect(() => {
+    if (isOverlay) {
+      document.documentElement.style.background = 'transparent';
+      document.body.style.background = 'transparent';
+      document.body.classList.add('is-overlay');
+    }
+  }, [isOverlay]);
+
   if (isOverlay) {
     return <FloatingHUD />;
   }

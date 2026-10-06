@@ -10,6 +10,10 @@ export const FloatingHUD: React.FC = () => {
   });
 
   useEffect(() => {
+    document.documentElement.style.background = 'transparent';
+    document.body.style.background = 'transparent';
+    document.body.classList.add('is-overlay');
+
     // Listen for local and cross-window broadcast events
     const handleLocal = (e: Event) => {
       const custom = e as CustomEvent<DictationStatusEvent>;
