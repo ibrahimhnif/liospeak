@@ -124,7 +124,8 @@ export class AudioRecorder {
 
         // 3. Connect audio processing nodes
         this.inputNode = this.audioContext.createMediaStreamSource(this.mediaStream!);
-        this.processor = this.audioContext.createScriptProcessor(4096, 1, 1);
+        // Using 2048 samples (~42ms at 48kHz) for lower buffering latency and smoother volume updates
+        this.processor = this.audioContext.createScriptProcessor(2048, 1, 1);
 
         this.processor.onaudioprocess = (e) => {
           if (!this.recording) return;
@@ -143,7 +144,7 @@ export class AudioRecorder {
           const rms = Math.sqrt(sum / input.length);
           const normalized = Math.min(1.0, rms * 5.0);
 
-          if (this.chunkCount % 5 === 1) {
+          if (this.chunkCount % 10 === 1) {
             termLog(
               `[Perekaman] Chunk #${this.chunkCount} diterima: ${input.length} samples, RMS volume: ${normalized.toFixed(3)}`,
               'log'
@@ -173,7 +174,7 @@ export class AudioRecorder {
     return this.startPromise;
   }
 
-  public async stop(): Promise<AudioRecordResult> {
+  public async stop(tailPaddingMs = 350): Promise<AudioRecordResult> {
     termLog(`Menghentikan perekaman audio... (total chunk diterima: ${this.chunkCount})`, 'info');
 
     // If start is still initializing (e.g. quick tap), wait for it to finish first
@@ -189,6 +190,18 @@ export class AudioRecorder {
     if (!this.recording) {
       termLog('Stop dipanggil tapi status recording = false', 'warn');
       throw new Error('Perekam suara belum dimulai atau belum selesai inisialisasi.');
+    }
+
+    // Trailing buffer / grace period:
+    // When the user finishes speaking or releases the key, human reflex causes them to release
+    // the key at the exact moment the final syllable is spoken. Waiting tailPaddingMs ensures
+    // the in-flight hardware audio buffer and trailing speech decay are fully captured.
+    if (tailPaddingMs > 0) {
+      termLog(
+        `[AudioRecorder] Menahan trailing buffer (${tailPaddingMs}ms) agar kata/suku kata terakhir tidak terpotong...`,
+        'info'
+      );
+      await new Promise((resolve) => setTimeout(resolve, tailPaddingMs));
     }
 
     this.recording = false;

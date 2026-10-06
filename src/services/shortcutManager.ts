@@ -175,10 +175,17 @@ class DictationCoordinator {
 
     termLog('>>> [TRIGGER] Memulai proses dikte...', 'info');
     try {
-      await invoke('show_overlay');
-      await this.broadcastStatus({ state: 'listening', volume: 0 });
-      this.startPromise = this.recorder?.start() || null;
-      await this.startPromise;
+      // 1. Start audio recording IMMEDIATELY in parallel with UI/Window operations
+      const startAudioPromise = this.recorder ? this.recorder.start() : Promise.resolve();
+      this.startPromise = startAudioPromise;
+
+      // 2. Concurrently show overlay and broadcast listening status
+      const showOverlayPromise = invoke('show_overlay').catch((err) => {
+        termLog(`Warning show_overlay: ${err}`, 'warn');
+      });
+      const broadcastPromise = this.broadcastStatus({ state: 'listening', volume: 0 });
+
+      await Promise.all([startAudioPromise, showOverlayPromise, broadcastPromise]);
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       termLog(`Gagal memulai perekaman: ${errorMsg}`, 'error');
@@ -211,10 +218,20 @@ class DictationCoordinator {
     }
 
     try {
+      // 1. Immediately provide visual feedback in the HUD
       await this.broadcastStatus({ state: 'transcribing' });
-      const recordResult = await this.recorder.stop();
 
-      termLog(`Audio ditangkap: durasi ${(recordResult.durationMs / 1000).toFixed(2)}s, ukuran ${(recordResult.blob.size / 1024).toFixed(1)} KB`, 'info');
+      // 2. Load configured trailing padding (default 400ms)
+      const config = loadConfig();
+      const paddingMs = typeof config.stopPaddingMs === 'number' ? config.stopPaddingMs : 400;
+
+      // 3. Stop audio recording with trailing grace period to ensure no cut-off syllables
+      const recordResult = await this.recorder.stop(paddingMs);
+
+      termLog(
+        `Audio ditangkap: durasi ${(recordResult.durationMs / 1000).toFixed(2)}s, ukuran ${(recordResult.blob.size / 1024).toFixed(1)} KB`,
+        'info'
+      );
 
       // Skip empty or micro recordings (<300ms)
       if (recordResult.durationMs < 300) {
@@ -224,7 +241,6 @@ class DictationCoordinator {
         return;
       }
 
-      const config = loadConfig();
       termLog(`Memanggil STT Engine: ${config.engine} (Model: ${config.geminiModel || 'default'})...`, 'info');
       const sttResult = await transcribeAudio(recordResult, config);
 

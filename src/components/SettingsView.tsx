@@ -482,6 +482,58 @@ export const SettingsView: React.FC = () => {
                 </div>
               </div>
 
+              {/* TRAILING AUDIO BUFFER / STOP PADDING CARD */}
+              <div className="card-box">
+                <div className="field-header-row">
+                  <div>
+                    <label className="field-label" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Clock size={16} style={{ color: 'var(--primary)' }} />
+                      <span>Jeda Akhir Rekaman (Trailing Buffer)</span>
+                      <span className="engine-card-badge" style={{ position: 'static' }}>Anti-Potong</span>
+                    </label>
+                    <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                      Menjaga mikrofon tetap merekam beberapa milidetik setelah tombol dilepas agar suku kata atau kata terakhir tidak terpotong sebelum ditranskripsi.
+                    </p>
+                  </div>
+                  <span className="key-badge" style={{ fontSize: '12px', padding: '4px 10px' }}>
+                    {config.stopPaddingMs ?? 400} ms
+                  </span>
+                </div>
+
+                <div className="shortcut-presets-grid" style={{ marginTop: '12px' }}>
+                  {[
+                    { label: '150 ms (Cepat)', value: 150 },
+                    { label: '300 ms (Standar)', value: 300 },
+                    { label: '400 ms (Direkomendasikan)', value: 400 },
+                    { label: '600 ms (Ekstra Aman)', value: 600 },
+                  ].map((preset) => (
+                    <button
+                      key={preset.value}
+                      type="button"
+                      className={`btn-chip ${(config.stopPaddingMs ?? 400) === preset.value ? 'selected' : ''}`}
+                      onClick={() => updateConfig({ stopPaddingMs: preset.value })}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div style={{ marginTop: '14px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <input
+                    type="range"
+                    min="100"
+                    max="1000"
+                    step="50"
+                    value={config.stopPaddingMs ?? 400}
+                    onChange={(e) => updateConfig({ stopPaddingMs: Number(e.target.value) })}
+                    style={{ flex: 1, accentColor: 'var(--primary)', cursor: 'pointer' }}
+                  />
+                  <span style={{ fontSize: '12px', color: 'var(--text-muted)', minWidth: '70px', textAlign: 'right' }}>
+                    {config.stopPaddingMs ?? 400} ms
+                  </span>
+                </div>
+              </div>
+
               <div className="card-box info-callout">
                 <Mic size={18} className="info-icon" />
                 <div>

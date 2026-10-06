@@ -21,6 +21,7 @@ export interface AppConfig {
   mode: 'toggle' | 'push-to-talk';
   useFnKeyMac: boolean;
   fnMode: 'hold' | 'double-tap';
+  stopPaddingMs: number;
   language: 'auto' | 'id' | 'en';
   systemPrompt: string;
   history: DictationHistoryItem[];
@@ -47,6 +48,7 @@ const DEFAULT_CONFIG: AppConfig = {
   mode: 'toggle',
   useFnKeyMac: true,
   fnMode: 'hold',
+  stopPaddingMs: 400,
   language: 'auto',
   systemPrompt: DEFAULT_SYSTEM_PROMPT,
   history: [],
@@ -62,6 +64,9 @@ export function loadConfig(): AppConfig {
     const config = { ...DEFAULT_CONFIG, ...parsed };
     if (config.geminiModel === 'gemini-2.0-flash' || config.geminiModel === 'gemini-2.5-flash') {
       config.geminiModel = 'gemini-3.8-flash';
+    }
+    if (config.stopPaddingMs === undefined || typeof config.stopPaddingMs !== 'number') {
+      config.stopPaddingMs = 400;
     }
     return config;
   } catch (err) {
