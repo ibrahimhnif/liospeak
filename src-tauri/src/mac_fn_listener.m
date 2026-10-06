@@ -2,6 +2,18 @@
 
 typedef void (*FnKeyCallback)(int is_pressed);
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+void start_mac_fn_listener(FnKeyCallback callback);
+void stop_mac_fn_listener(void);
+void get_mac_cursor_pos(double *out_x, double *out_y, double *out_screen_w, double *out_screen_h);
+
+#ifdef __cplusplus
+}
+#endif
+
 static id g_global_monitor = nil;
 static id g_local_monitor = nil;
 static BOOL g_was_pressed = NO;
