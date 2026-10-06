@@ -192,7 +192,6 @@ export async function transcribeWithGemini35(
         'Content-Type': 'application/json',
         'x-goog-api-key': apiKey,
       },
-      keepalive: true,
       body: JSON.stringify({
         model: 'gemini-3.5-transcribe',
         input: [
@@ -301,7 +300,6 @@ export async function transcribeWithGemini(
       'Content-Type': 'application/json',
       'x-goog-api-key': config.geminiApiKey.trim(),
     },
-    keepalive: true,
     body: JSON.stringify(payload),
   });
 
