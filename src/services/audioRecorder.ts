@@ -12,6 +12,8 @@ export class AudioRecorder {
   private audioContext: AudioContext | null = null;
   private processor: ScriptProcessorNode | null = null;
   private inputNode: MediaStreamAudioSourceNode | null = null;
+  private highPassFilter: BiquadFilterNode | null = null;
+  private compressorNode: DynamicsCompressorNode | null = null;
   private muteNode: GainNode | null = null;
   private pcmBuffers: Float32Array[] = [];
   private recording = false;
@@ -125,7 +127,22 @@ export class AudioRecorder {
 
         // 3. Connect audio processing nodes
         this.inputNode = this.audioContext.createMediaStreamSource(this.mediaStream!);
-        // Using 2048 samples (~42ms at 48kHz) for lower buffering latency and smoother volume updates
+
+        // High-pass filter (85Hz): eliminates mic handling, desk thuds, typing vibration, and breath plosives
+        this.highPassFilter = this.audioContext.createBiquadFilter();
+        this.highPassFilter.type = 'highpass';
+        this.highPassFilter.frequency.setValueAtTime(85, this.audioContext.currentTime);
+        this.highPassFilter.Q.setValueAtTime(0.707, this.audioContext.currentTime);
+
+        // Broadcast Dynamics Compressor: levels speech dynamics, boosts quiet syllables, prevents clipping
+        this.compressorNode = this.audioContext.createDynamicsCompressor();
+        this.compressorNode.threshold.setValueAtTime(-24, this.audioContext.currentTime);
+        this.compressorNode.knee.setValueAtTime(30, this.audioContext.currentTime);
+        this.compressorNode.ratio.setValueAtTime(4, this.audioContext.currentTime);
+        this.compressorNode.attack.setValueAtTime(0.003, this.audioContext.currentTime);
+        this.compressorNode.release.setValueAtTime(0.25, this.audioContext.currentTime);
+
+        // Using 2048 samples (~42ms at 48kHz) for low buffering latency and smooth volume meter updates
         this.processor = this.audioContext.createScriptProcessor(2048, 1, 1);
 
         this.processor.onaudioprocess = (e) => {
@@ -164,7 +181,10 @@ export class AudioRecorder {
         this.muteNode = this.audioContext.createGain();
         this.muteNode.gain.value = 0.0;
 
-        this.inputNode.connect(this.processor);
+        // DSP Graph: Mic -> HighPass(85Hz) -> Compressor -> Processor -> Mute -> Destination
+        this.inputNode.connect(this.highPassFilter);
+        this.highPassFilter.connect(this.compressorNode);
+        this.compressorNode.connect(this.processor);
         this.processor.connect(this.muteNode);
         this.muteNode.connect(this.audioContext.destination);
 
@@ -223,6 +243,14 @@ export class AudioRecorder {
       this.muteNode.disconnect();
       this.muteNode = null;
     }
+    if (this.compressorNode) {
+      this.compressorNode.disconnect();
+      this.compressorNode = null;
+    }
+    if (this.highPassFilter) {
+      this.highPassFilter.disconnect();
+      this.highPassFilter = null;
+    }
     if (this.inputNode) {
       this.inputNode.disconnect();
       this.inputNode = null;
@@ -263,12 +291,19 @@ export class AudioRecorder {
 
     termLog(`Merged raw samples: ${merged.length} pada ${inputSampleRate}Hz`, 'info');
 
-    // Downsample to 16000Hz (standard STT sample rate)
-    const downsampled = downsampleBuffer(merged, inputSampleRate, 16000);
-    termLog(`Downsampled to 16000Hz: ${downsampled.length} samples`, 'info');
+    // 1. Silence Trimming: trim leading/trailing dead room noise (< -42dB RMS)
+    const trimmed = trimSilence(merged, inputSampleRate);
 
-    // Encode to 16kHz 16-bit Mono WAV & instant Base64
-    const { blob: wavBlob, base64 } = encodeWAV(downsampled, 16000);
+    // 2. Peak Normalization: auto-boost speech amplitude to studio vocal level (0.92 peak)
+    const normalized = normalizeAudio(trimmed);
+
+    // 3. Resample to 24000Hz (Wideband HD Audio preserving frequencies up to 12kHz)
+    const targetSampleRate = inputSampleRate >= 24000 ? 24000 : inputSampleRate;
+    const downsampled = downsampleBuffer(normalized, inputSampleRate, targetSampleRate);
+    termLog(`Resampled to ${targetSampleRate}Hz (HD Audio): ${downsampled.length} samples`, 'info');
+
+    // 4. Encode to HD 16-bit Mono WAV & instant Base64
+    const { blob: wavBlob, base64 } = encodeWAV(downsampled, targetSampleRate);
 
     termLog(`WAV Blob berhasil di-generate! Ukuran: ${(wavBlob.size / 1024).toFixed(1)} KB`, 'info');
 
@@ -276,7 +311,7 @@ export class AudioRecorder {
       blob: wavBlob,
       base64,
       durationMs,
-      sampleRate: 16000,
+      sampleRate: targetSampleRate,
     };
   }
 
@@ -292,6 +327,14 @@ export class AudioRecorder {
     if (this.muteNode) {
       this.muteNode.disconnect();
       this.muteNode = null;
+    }
+    if (this.compressorNode) {
+      this.compressorNode.disconnect();
+      this.compressorNode = null;
+    }
+    if (this.highPassFilter) {
+      this.highPassFilter.disconnect();
+      this.highPassFilter = null;
     }
     if (this.inputNode) {
       this.inputNode.disconnect();
@@ -309,7 +352,86 @@ export class AudioRecorder {
 }
 
 /**
- * Resamples Float32Array from inputRate to outputRate.
+ * Trims leading and trailing room silence (below -42dB RMS) from audio buffer.
+ * Preserves a small 40ms pre-roll and 60ms post-roll margin to protect soft consonants.
+ */
+function trimSilence(buffer: Float32Array, sampleRate: number): Float32Array {
+  if (buffer.length < sampleRate * 0.25) {
+    return buffer; // Do not trim if under 250ms
+  }
+
+  const windowSize = Math.floor(sampleRate * 0.02); // 20ms analysis window
+  const threshold = 0.008; // ~ -42dB RMS threshold for speech presence
+
+  let startIndex = 0;
+  for (let i = 0; i <= buffer.length - windowSize; i += windowSize) {
+    let sum = 0;
+    for (let j = 0; j < windowSize; j++) {
+      const val = buffer[i + j];
+      sum += val * val;
+    }
+    const rms = Math.sqrt(sum / windowSize);
+    if (rms > threshold) {
+      startIndex = Math.max(0, i - Math.floor(sampleRate * 0.04)); // 40ms safety margin
+      break;
+    }
+  }
+
+  let endIndex = buffer.length;
+  for (let i = buffer.length - windowSize; i >= startIndex; i -= windowSize) {
+    let sum = 0;
+    for (let j = 0; j < windowSize; j++) {
+      const val = buffer[i + j];
+      sum += val * val;
+    }
+    const rms = Math.sqrt(sum / windowSize);
+    if (rms > threshold) {
+      endIndex = Math.min(buffer.length, i + windowSize + Math.floor(sampleRate * 0.06)); // 60ms safety margin
+      break;
+    }
+  }
+
+  if (endIndex <= startIndex || endIndex - startIndex < sampleRate * 0.15) {
+    return buffer;
+  }
+
+  termLog(
+    `[Audio DSP] Trimmed silence: cut ${(startIndex / sampleRate * 1000).toFixed(0)}ms head, ${((buffer.length - endIndex) / sampleRate * 1000).toFixed(0)}ms tail`,
+    'info'
+  );
+
+  return buffer.subarray(startIndex, endIndex);
+}
+
+/**
+ * Normalizes audio buffer so peak amplitude reaches 0.92,
+ * maximizing vocal SNR and eliminating quiet/muffled speech for the AI.
+ */
+function normalizeAudio(buffer: Float32Array): Float32Array {
+  let maxPeak = 0;
+  for (let i = 0; i < buffer.length; i++) {
+    const abs = Math.abs(buffer[i]);
+    if (abs > maxPeak) maxPeak = abs;
+  }
+
+  // If audio has speech and is not already peaked, boost gain
+  if (maxPeak > 0.015 && maxPeak < 0.88) {
+    const gain = Math.min(0.92 / maxPeak, 4.5);
+    termLog(
+      `[Audio Normalizer] Peak boost: ${maxPeak.toFixed(3)} -> ${(maxPeak * gain).toFixed(3)} (Gain: ${gain.toFixed(2)}x)`,
+      'info'
+    );
+    const out = new Float32Array(buffer.length);
+    for (let i = 0; i < buffer.length; i++) {
+      out[i] = buffer[i] * gain;
+    }
+    return out;
+  }
+  return buffer;
+}
+
+/**
+ * Resamples Float32Array with linear interpolation to eliminate aliasing artifacts.
  */
 function downsampleBuffer(buffer: Float32Array, inputRate: number, outputRate: number): Float32Array {
   if (inputRate === outputRate) return buffer;
@@ -317,8 +439,11 @@ function downsampleBuffer(buffer: Float32Array, inputRate: number, outputRate: n
   const newLength = Math.round(buffer.length / ratio);
   const result = new Float32Array(newLength);
   for (let i = 0; i < newLength; i++) {
-    const originalIndex = Math.floor(i * ratio);
-    result[i] = buffer[originalIndex] || 0;
+    const originIndex = i * ratio;
+    const indexFloor = Math.floor(originIndex);
+    const indexCeil = Math.min(indexFloor + 1, buffer.length - 1);
+    const weight = originIndex - indexFloor;
+    result[i] = buffer[indexFloor] * (1 - weight) + buffer[indexCeil] * weight;
   }
   return result;
 }

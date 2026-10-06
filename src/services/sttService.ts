@@ -357,29 +357,57 @@ export async function transcribeWithGemini(
     config.geminiApiKey.trim()
   )}`;
 
-  const prompt =
+  let languagePrompt = '';
+  if (config.language === 'id') {
+    languagePrompt =
+      'Bahasa utama adalah Bahasa Indonesia informal / gaul / santai dan code-switching bahasa Inggris teknis. ' +
+      'WAJIB: Pertahankan semua partikel gaul dan kata santai secara persis (verbatim): ' +
+      'gua, gue, lu, lo, gw, sih, deh, kan, dong, gitu, kayak, udah, belum, nggak, gak, banget, tuh, nih, ya. ' +
+      'JANGAN mengubah kata gaul menjadi kata formal (misalnya JANGAN ubah "gue" jadi "saya", jangan ubah "gak/nggak" jadi "tidak").';
+  } else if (config.language === 'en') {
+    languagePrompt =
+      'The speech is in English. Transcribe verbatim word-for-word with accurate punctuation and capitalization.';
+  } else {
+    languagePrompt =
+      'Language is multilingual (Indonesian & English code-switching). ' +
+      'Strictly preserve Indonesian conversational slang (gue, lu, sih, deh, kan, dong, gitu, kayak, gak, banget) ' +
+      'and English technical developer terms (API, GitHub, deploy, PR, commit, bug, dll) verbatim.';
+  }
+
+  const basePrompt =
     config.systemPrompt ||
-    `Transcribe the audio speech accurately into clean, well-punctuated text. ` +
-    `Support Indonesian, English, and natural Indonesian-English code-switching. ` +
-    `Output ONLY the transcribed spoken words, with no conversational remarks or extra commentary.`;
+    `You are a high-accuracy, verbatim speech-to-text transcription engine.
+Transcribe spoken audio EXACTLY as spoken (word-for-word).
+Output ONLY the transcribed words. Never add conversational remarks, replies, or explanations.`;
+
+  const systemInstructionText = `${basePrompt}\n\n[Acoustic & Vocabulary Rule]\n${languagePrompt}`;
 
   const payload = {
+    systemInstruction: {
+      parts: [
+        {
+          text: systemInstructionText,
+        },
+      ],
+    },
     contents: [
       {
         role: 'user',
         parts: [
-          { text: prompt },
           {
             inlineData: {
               mimeType: 'audio/wav',
               data: audioBase64,
             },
           },
+          {
+            text: 'Transcribe this audio recording verbatim into text. Output ONLY the transcribed words with proper punctuation.',
+          },
         ],
       },
     ],
     generationConfig: {
-      temperature: 0.1,
+      temperature: 0.0,
       topP: 0.95,
       maxOutputTokens: 2048,
     },
@@ -455,10 +483,12 @@ export async function transcribeWithGroq(
     formData.append('language', config.language);
   }
 
-  formData.append(
-    'prompt',
-    'Transkripsi percakapan bahasa Indonesia dan bahasa Inggris, code-switching, gunakan tanda baca yang benar.'
-  );
+  const promptContext =
+    config.language === 'en'
+      ? 'Verbatim transcription of English speech with accurate capitalization and punctuation.'
+      : 'Transkripsi percakapan bahasa Indonesia informal santai: gue, gua, lu, lo, gw, sih, deh, kan, dong, gitu, kayak, gak, nggak, banget, udah, nih, tuh, ya, project, bug, fix, deploy, code, commit, merge, API, error, test, feature.';
+
+  formData.append('prompt', promptContext);
 
   const response = await fetch(url, {
     method: 'POST',
