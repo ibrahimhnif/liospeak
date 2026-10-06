@@ -26,8 +26,18 @@ export async function transcribeAudio(
     if (config.geminiModel === 'gemini-3.5-transcribe') {
       try {
         termLog('[STT] Mengirim audio ke Gemini 3.5 Transcribe API...', 'info');
-        const text = await transcribeWithGemini35(audioResult.blob, audioResult.base64, config);
-        termLog(`[STT] Sukses Gemini 3.5: "${text}"`, 'info');
+        let text = await transcribeWithGemini35(audioResult.blob, audioResult.base64, config);
+        
+        // If Gemini 3.5 returns empty string, fallback to gemini-2.0-flash!
+        if (!text || !text.trim()) {
+          termLog('[STT] Gemini 3.5 mengembalikan teks kosong, otomatis fallback ke gemini-2.0-flash...', 'warn');
+          text = await transcribeWithGemini(audioResult.base64, {
+            ...config,
+            geminiModel: 'gemini-2.0-flash',
+          });
+        }
+
+        termLog(`[STT] Sukses Gemini STT: "${text}"`, 'info');
         return { text, engine: 'gemini' };
       } catch (err) {
         termLog(`Gemini 3.5 error (${err}), mencoba fallback ke gemini-2.0-flash...`, 'warn');
@@ -83,13 +93,18 @@ export async function transcribeWithGemini35(
       }),
     });
 
+    termLog(`[Gemini 3.5 Interactions API HTTP Status: ${res.status}]`, 'info');
     if (res.ok) {
       const data = await res.json();
+      termLog(`[Gemini 3.5 Interactions Response] ${JSON.stringify(data).slice(0, 500)}`, 'info');
       const text = data?.result?.text || data?.text || data?.transcript;
       if (text) return cleanTranscribedText(text);
+    } else {
+      const errBody = await res.text();
+      termLog(`[Gemini 3.5 Interactions non-OK body: ${errBody.slice(0, 300)}]`, 'warn');
     }
   } catch (e) {
-    console.warn('Interactions inline attempt:', e);
+    termLog(`Interactions inline attempt error: ${e}`, 'warn');
   }
 
   // Method 2: Files API upload then interactions call
@@ -122,24 +137,26 @@ export async function transcribeWithGemini35(
 
         if (interactRes.ok) {
           const interactData = await interactRes.json();
+          termLog(`[Gemini 3.5 Files+Interact Response] ${JSON.stringify(interactData).slice(0, 500)}`, 'info');
           const text = interactData?.result?.text || interactData?.text || interactData?.transcript;
           if (text) return cleanTranscribedText(text);
         }
       }
     }
   } catch (e) {
-    console.warn('Files API upload failed:', e);
+    termLog(`Files API upload error: ${e}`, 'warn');
   }
 
-  // Method 3: generateContent with gemini-3.5-transcribe
+  // Method 3: Call gemini-2.0-flash directly as proven audio STT engine
+  termLog('[STT] Menggunakan Gemini 2.0 Flash multimodal audio engine...', 'info');
   return transcribeWithGemini(audioBase64, {
     ...config,
-    geminiModel: 'gemini-3.5-transcribe',
+    geminiModel: 'gemini-2.0-flash',
   });
 }
 
 /**
- * Calls Gemini 2.0 Flash with raw audio data and custom system prompt.
+ * Calls Gemini with raw audio data and custom system prompt.
  */
 export async function transcribeWithGemini(
   audioBase64: string,
@@ -154,19 +171,20 @@ export async function transcribeWithGemini(
     config.language === 'id' ? 'Bahasa Indonesia' : config.language === 'en' ? 'English' : 'Indonesian / English auto-detect'
   }`;
 
+  // Note: Put prompt text first, audio data second
   const payload = {
     contents: [
       {
         role: 'user',
         parts: [
           {
+            text: promptText,
+          },
+          {
             inlineData: {
               mimeType: 'audio/wav',
               data: audioBase64,
             },
-          },
-          {
-            text: promptText,
           },
         ],
       },
@@ -176,6 +194,8 @@ export async function transcribeWithGemini(
       maxOutputTokens: 2048,
     },
   };
+
+  termLog(`[Gemini API Request] Mengirim ke model "${model}" (${(audioBase64.length / 1024).toFixed(1)} KB base64)...`, 'info');
 
   const response = await fetch(url, {
     method: 'POST',
@@ -187,6 +207,7 @@ export async function transcribeWithGemini(
 
   if (!response.ok) {
     const errorBody = await response.text();
+    termLog(`[Gemini API Error] HTTP ${response.status}: ${errorBody.slice(0, 400)}`, 'error');
     let message = `Gemini API error (${response.status})`;
     try {
       const parsed = JSON.parse(errorBody);
@@ -200,7 +221,25 @@ export async function transcribeWithGemini(
   }
 
   const data = await response.json();
-  const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  termLog(`[Gemini API Response] ${JSON.stringify(data).slice(0, 800)}`, 'info');
+
+  // Parse all text parts (ignoring thoughts if present)
+  const parts = data?.candidates?.[0]?.content?.parts || [];
+  let rawText = '';
+  for (const part of parts) {
+    if (typeof part.text === 'string' && !part.thought) {
+      rawText += part.text + ' ';
+    }
+  }
+
+  if (!rawText.trim() && parts.length > 0) {
+    rawText = parts[parts.length - 1]?.text || '';
+  }
+
+  if (!rawText.trim()) {
+    rawText = data?.result?.text || data?.transcript || data?.text || '';
+  }
+
   return cleanTranscribedText(rawText);
 }
 

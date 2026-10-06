@@ -20,8 +20,16 @@ class DictationCoordinator {
   private state: DictationState = 'idle';
   private currentShortcut = '';
   private lastFnPressTime = 0;
+  private isEnabled = true;
 
   constructor() {
+    // Crucial: Only initialize in MAIN window, never in the overlay HUD window!
+    const isOverlay = typeof window !== 'undefined' && window.location.hash.includes('overlay');
+    if (isOverlay) {
+      this.isEnabled = false;
+      return;
+    }
+
     this.recorder = new AudioRecorder((volume) => {
       this.broadcastStatus({ state: 'listening', volume });
     });
@@ -101,6 +109,7 @@ class DictationCoordinator {
   }
 
   public async updateShortcut(newShortcut: string): Promise<void> {
+    if (!this.isEnabled) return;
     try {
       if (this.currentShortcut) {
         await unregister(this.currentShortcut);
@@ -146,6 +155,7 @@ class DictationCoordinator {
   }
 
   public async startRecording(): Promise<void> {
+    if (!this.isEnabled) return;
     if (this.state !== 'idle') {
       termLog(`startRecording diabaikan karena status saat ini: ${this.state}`, 'warn');
       return;
