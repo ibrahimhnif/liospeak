@@ -1,6 +1,6 @@
 import { register, unregister, unregisterAll } from '@tauri-apps/plugin-global-shortcut';
 import { invoke } from '@tauri-apps/api/core';
-import { emit } from '@tauri-apps/api/event';
+import { emit, listen } from '@tauri-apps/api/event';
 import { AudioRecorder } from './audioRecorder';
 import { transcribeAudio } from './sttService';
 import { loadConfig, addHistoryItem } from './configStore';
@@ -18,11 +18,69 @@ class DictationCoordinator {
   private recorder: AudioRecorder | null = null;
   private state: DictationState = 'idle';
   private currentShortcut = '';
+  private lastFnPressTime = 0;
 
   constructor() {
     this.recorder = new AudioRecorder((volume) => {
       this.broadcastStatus({ state: 'listening', volume });
     });
+
+    this.setupFnKeyListener();
+  }
+
+  private async setupFnKeyListener() {
+    try {
+      listen<string>('fn-key-state', async (event) => {
+        const config = loadConfig();
+        if (!config.useFnKeyMac) return;
+
+        const isPressed = event.payload === 'pressed';
+        const fnMode = config.fnMode || 'hold';
+
+        if (fnMode === 'hold') {
+          // Push-to-Talk via Fn key
+          if (isPressed) {
+            if (this.state === 'idle') {
+              await this.startRecording();
+            }
+          } else {
+            if (this.state === 'listening') {
+              await this.stopAndTranscribe();
+            }
+          }
+        } else if (fnMode === 'double-tap') {
+          // Double-Tap Fn to toggle
+          if (isPressed) {
+            const now = Date.now();
+            if (now - this.lastFnPressTime < 450) {
+              if (this.state === 'idle') {
+                await this.startRecording();
+              } else if (this.state === 'listening') {
+                await this.stopAndTranscribe();
+              }
+              this.lastFnPressTime = 0;
+            } else {
+              this.lastFnPressTime = now;
+            }
+          }
+        }
+      });
+
+      const initialConfig = loadConfig();
+      if (initialConfig.useFnKeyMac) {
+        await invoke('set_fn_listener_enabled', { enabled: true });
+      }
+    } catch (e) {
+      console.warn('Fn key listener setup warning:', e);
+    }
+  }
+
+  public async updateFnListener(enabled: boolean): Promise<void> {
+    try {
+      await invoke('set_fn_listener_enabled', { enabled });
+    } catch (e) {
+      console.warn('Failed to update Fn listener state:', e);
+    }
   }
 
   public getState(): DictationState {

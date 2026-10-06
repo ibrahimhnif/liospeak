@@ -72,6 +72,51 @@ fn show_main_window(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+use std::sync::Mutex;
+use tauri::Emitter;
+
+static APP_HANDLE: Mutex<Option<AppHandle>> = Mutex::new(None);
+
+#[cfg(target_os = "macos")]
+extern "C" {
+    fn start_mac_fn_listener(callback: extern "C" fn(i32));
+    fn stop_mac_fn_listener();
+}
+
+#[cfg(target_os = "macos")]
+extern "C" fn on_fn_key_changed(is_pressed: i32) {
+    if let Ok(guard) = APP_HANDLE.lock() {
+        if let Some(ref app) = *guard {
+            let state = if is_pressed == 1 { "pressed" } else { "released" };
+            let _ = app.emit("fn-key-state", state);
+        }
+    }
+}
+
+#[tauri::command]
+fn set_fn_listener_enabled(app: AppHandle, enabled: bool) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(mut guard) = APP_HANDLE.lock() {
+            *guard = Some(app);
+        }
+        if enabled {
+            unsafe {
+                start_mac_fn_listener(on_fn_key_changed);
+            }
+        } else {
+            unsafe {
+                stop_mac_fn_listener();
+            }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, enabled);
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -84,7 +129,8 @@ pub fn run() {
             show_overlay,
             hide_overlay,
             hide_main_window,
-            show_main_window
+            show_main_window,
+            set_fn_listener_enabled
         ])
         .setup(|app| {
             // Build Tray Menu

@@ -154,6 +154,10 @@ export const SettingsView: React.FC = () => {
       });
     }
 
+    if (patch.useFnKeyMac !== undefined) {
+      dictationCoordinator.updateFnListener(patch.useFnKeyMac);
+    }
+
     setSaveBanner(true);
     setTimeout(() => setSaveBanner(false), 2000);
   };
@@ -387,8 +391,65 @@ export const SettingsView: React.FC = () => {
                 </div>
               </div>
 
+              {/* DEDICATED MAC FN KEY CARD */}
               <div className="card-box">
-                <label className="field-label">Mode Pemicu Dikte</label>
+                <div className="field-header-row">
+                  <div>
+                    <label className="field-label" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span>🌐 Tombol Fn / Globe (Khusus Mac)</span>
+                      <span className="engine-card-badge" style={{ position: 'static' }}>Mac Native</span>
+                    </label>
+                    <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                      Gunakan tombol Fn sendirian sebagai tombol dikte cepat tanpa perlu kombinasi tombol lain.
+                    </p>
+                  </div>
+                  <label className="toggle-switch">
+                    <input
+                      type="checkbox"
+                      checked={config.useFnKeyMac}
+                      onChange={(e) => updateConfig({ useFnKeyMac: e.target.checked })}
+                    />
+                    <span className="toggle-slider" />
+                  </label>
+                </div>
+
+                {config.useFnKeyMac && (
+                  <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <div className="mode-options-grid">
+                      <div
+                        className={`mode-option ${config.fnMode === 'hold' ? 'selected' : ''}`}
+                        onClick={() => updateConfig({ fnMode: 'hold' })}
+                      >
+                        <div className="mode-header">
+                          <Radio size={16} className="mode-radio" />
+                          <strong>Tahan Tombol Fn (Push-to-Talk)</strong>
+                        </div>
+                        <p>Tahan tombol Fn saat berbicara, lepaskan untuk langsung mengetik hasil ke aplikasi aktif.</p>
+                      </div>
+
+                      <div
+                        className={`mode-option ${config.fnMode === 'double-tap' ? 'selected' : ''}`}
+                        onClick={() => updateConfig({ fnMode: 'double-tap' })}
+                      >
+                        <div className="mode-header">
+                          <Radio size={16} className="mode-radio" />
+                          <strong>Tekan Fn 2x Cepat (Double-Tap)</strong>
+                        </div>
+                        <p>Tekan tombol Fn dua kali berturut-turut untuk mulai atau selesai mendikte (seperti dikte asli Apple).</p>
+                      </div>
+                    </div>
+
+                    <div className="info-callout" style={{ fontSize: '11px', padding: '10px 14px' }}>
+                      <span>
+                        💡 <strong>Tips macOS:</strong> Agar tombol Fn tidak membuka Emoji bawaan Mac, buka <strong>System Settings → Keyboard → 'Press 🌐 key to'</strong> lalu pilih <strong>'Do Nothing'</strong>.
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="card-box">
+                <label className="field-label">Mode Pemicu Shortcut Standar</label>
                 <div className="mode-options-grid">
                   <div
                     className={`mode-option ${config.mode === 'toggle' ? 'selected' : ''}`}

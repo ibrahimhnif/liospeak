@@ -19,6 +19,8 @@ export interface AppConfig {
   groqModel: string;
   shortcut: string;
   mode: 'toggle' | 'push-to-talk';
+  useFnKeyMac: boolean;
+  fnMode: 'hold' | 'double-tap';
   language: 'auto' | 'id' | 'en';
   systemPrompt: string;
   history: DictationHistoryItem[];
@@ -43,6 +45,8 @@ const DEFAULT_CONFIG: AppConfig = {
   groqModel: 'whisper-large-v3',
   shortcut: 'CommandOrControl+Shift+Space',
   mode: 'toggle',
+  useFnKeyMac: true,
+  fnMode: 'hold',
   language: 'auto',
   systemPrompt: DEFAULT_SYSTEM_PROMPT,
   history: [],
