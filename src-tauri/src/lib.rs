@@ -42,12 +42,36 @@ fn paste_text(app: AppHandle, text: String) -> Result<(), String> {
 extern "C" {
     fn start_mac_fn_listener(callback: extern "C" fn(i32));
     fn stop_mac_fn_listener();
-    fn get_mac_cursor_pos(
-        out_x: *mut f64,
-        out_y: *mut f64,
-        out_screen_w: *mut f64,
-        out_screen_h: *mut f64,
-    );
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGEventCreate(source: *const std::ffi::c_void) -> *mut std::ffi::c_void;
+    fn CGEventGetLocation(event: *mut std::ffi::c_void) -> CGPoint;
+    fn CFRelease(cf: *mut std::ffi::c_void);
+}
+
+#[cfg(target_os = "macos")]
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+struct CGPoint {
+    x: f64,
+    y: f64,
+}
+
+#[cfg(target_os = "macos")]
+fn get_cursor_position() -> (f64, f64) {
+    unsafe {
+        let event = CGEventCreate(std::ptr::null());
+        if !event.is_null() {
+            let loc = CGEventGetLocation(event);
+            CFRelease(event);
+            (loc.x, loc.y)
+        } else {
+            (960.0, 540.0)
+        }
+    }
 }
 
 #[tauri::command]
@@ -55,18 +79,16 @@ fn show_overlay(app: AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("overlay") {
         #[cfg(target_os = "macos")]
         {
-            let mut cur_x = 0.0f64;
-            let mut cur_y = 0.0f64;
-            let mut screen_w = 1920.0f64;
-            let mut screen_h = 1080.0f64;
-            unsafe {
-                get_mac_cursor_pos(
-                    &mut cur_x,
-                    &mut cur_y,
-                    &mut screen_w,
-                    &mut screen_h,
-                );
-            }
+            let (cur_x, cur_y) = get_cursor_position();
+
+            // Detect current active monitor dimensions dynamically
+            let (screen_w, screen_h) = if let Ok(Some(monitor)) = window.current_monitor() {
+                let scale = monitor.scale_factor();
+                let size = monitor.size();
+                (size.width as f64 / scale, size.height as f64 / scale)
+            } else {
+                (1920.0, 1080.0)
+            };
 
             let overlay_w = 380.0f64;
             let overlay_h = 88.0f64;

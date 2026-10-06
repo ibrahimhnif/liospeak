@@ -8,7 +8,6 @@ extern "C" {
 
 void start_mac_fn_listener(FnKeyCallback callback);
 void stop_mac_fn_listener(void);
-void get_mac_cursor_pos(double *out_x, double *out_y, double *out_screen_w, double *out_screen_h);
 
 #ifdef __cplusplus
 }
@@ -62,33 +61,3 @@ void stop_mac_fn_listener(void) {
     }
     g_was_pressed = NO;
 }
-
-void get_mac_cursor_pos(double *out_x, double *out_y, double *out_screen_w, double *out_screen_h) {
-    CGEventRef event = CGEventCreate(NULL);
-    CGPoint point = CGPointZero;
-    if (event) {
-        point = CGEventGetLocation(event);
-        CFRelease(event);
-    } else {
-        NSPoint mouseLoc = [NSEvent mouseLocation];
-        NSScreen *primary = [NSScreen screens].firstObject;
-        double sHeight = primary ? primary.frame.size.height : 1080.0;
-        point = CGPointMake(mouseLoc.x, sHeight - mouseLoc.y);
-    }
-
-    if (out_x) *out_x = (double)point.x;
-    if (out_y) *out_y = (double)point.y;
-
-    NSScreen *currentScreen = [NSScreen mainScreen];
-    if (!currentScreen) {
-        currentScreen = [NSScreen screens].firstObject;
-    }
-    if (currentScreen) {
-        if (out_screen_w) *out_screen_w = (double)currentScreen.frame.size.width;
-        if (out_screen_h) *out_screen_h = (double)currentScreen.frame.size.height;
-    } else {
-        if (out_screen_w) *out_screen_w = 1920.0;
-        if (out_screen_h) *out_screen_h = 1080.0;
-    }
-}
-
