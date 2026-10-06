@@ -300,6 +300,121 @@ body {
   color: #a5b4fc;
 }
 
+/* INTERACTIVE SHORTCUT RECORDER */
+.shortcut-recorder-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.shortcut-box-interactive {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  background: var(--bg-sidebar);
+  border: 2px dashed var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  outline: none;
+}
+
+.shortcut-box-interactive:hover {
+  border-color: #6366f1;
+  background: rgba(99, 102, 241, 0.05);
+}
+
+.shortcut-box-interactive.recording {
+  border-color: #ef4444;
+  border-style: solid;
+  background: rgba(239, 68, 68, 0.08);
+  box-shadow: 0 0 20px rgba(239, 68, 68, 0.25);
+  animation: borderGlow 1.5s infinite;
+}
+
+@keyframes borderGlow {
+  0% { border-color: rgba(239, 68, 68, 0.8); }
+  50% { border-color: rgba(239, 68, 68, 0.3); }
+  100% { border-color: rgba(239, 68, 68, 0.8); }
+}
+
+.shortcut-keys-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.key-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 12px;
+  background: #1e2538;
+  border: 1px solid #334155;
+  border-bottom: 2px solid #475569;
+  border-radius: 6px;
+  color: #f1f5f9;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro", monospace;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.key-badge-plus {
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.recording-indicator {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.rec-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #ef4444;
+  box-shadow: 0 0 8px #ef4444;
+  animation: pulse 1s infinite;
+}
+
+.recording-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: #fca5a5;
+}
+
+.recording-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.btn-record-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: var(--bg-card-hover);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: #a5b4fc;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-record-trigger:hover {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+}
+
 .custom-shortcut-row {
   margin-top: 6px;
   display: flex;

@@ -64,6 +64,76 @@ export const SettingsView: React.FC = () => {
   const [testMsg, setTestMsg] = useState('');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [saveBanner, setSaveBanner] = useState(false);
+  const [isRecordingShortcut, setIsRecordingShortcut] = useState(false);
+  const [recordedPreview, setRecordedPreview] = useState('');
+
+  const formatModifier = (mod: string) => {
+    if (mod === 'CommandOrControl') return '⌘ Cmd / Ctrl';
+    if (mod === 'Shift') return '⇧ Shift';
+    if (mod === 'Alt') return '⌥ Option / Alt';
+    return mod;
+  };
+
+  const handleShortcutKeyDown = (e: React.KeyboardEvent) => {
+    if (!isRecordingShortcut) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (e.key === 'Escape') {
+      setIsRecordingShortcut(false);
+      setRecordedPreview('');
+      return;
+    }
+
+    const modifiers: string[] = [];
+    if (e.metaKey || e.ctrlKey) modifiers.push('CommandOrControl');
+    if (e.altKey) modifiers.push('Alt');
+    if (e.shiftKey) modifiers.push('Shift');
+
+    // If only a modifier was pressed, update preview
+    if (['Control', 'Meta', 'Alt', 'Shift'].includes(e.key)) {
+      setRecordedPreview(modifiers.map(formatModifier).join(' + ') + ' + ...');
+      return;
+    }
+
+    // A final non-modifier key was pressed
+    let keyName = e.key;
+    if (e.code === 'Space') {
+      keyName = 'Space';
+    } else if (/^F\d+$/.test(e.key)) {
+      keyName = e.key;
+    } else if (e.key.length === 1) {
+      keyName = e.key.toUpperCase();
+    } else {
+      keyName = e.code.replace('Key', '').replace('Digit', '');
+    }
+
+    const parts = [...modifiers, keyName];
+    const newShortcut = parts.join('+');
+
+    updateConfig({ shortcut: newShortcut });
+    setIsRecordingShortcut(false);
+    setRecordedPreview('');
+  };
+
+  const renderKeyBadges = (shortcutStr: string) => {
+    if (!shortcutStr) return <span className="key-badge">Belum diatur</span>;
+    const parts = shortcutStr.split('+');
+    return parts.map((part, idx) => {
+      let label = part;
+      if (part === 'CommandOrControl') label = '⌘ Cmd / Ctrl';
+      else if (part === 'Shift') label = '⇧ Shift';
+      else if (part === 'Alt') label = '⌥ Option / Alt';
+      else if (part === 'Space') label = 'Space ␣';
+
+      return (
+        <span key={idx} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+          {idx > 0 && <span className="key-badge-plus">+</span>}
+          <span className="key-badge">{label}</span>
+        </span>
+      );
+    });
+  };
 
   useEffect(() => {
     // Initial shortcut registration
@@ -233,29 +303,87 @@ export const SettingsView: React.FC = () => {
                 <p>Tekan tombol ini di aplikasi atau kolom teks manapun untuk mulai mengetik dengan suara.</p>
               </div>
 
-              <div className="card-box">
-                <label className="field-label">Pilih Kombinasi Shortcut</label>
-                <div className="shortcut-presets-grid">
-                  {SHORTCUT_PRESETS.map((preset) => (
+              {/* INTERACTIVE SHORTCUT RECORDER CARD */}
+              <div className="card-box shortcut-recorder-card">
+                <div className="field-header-row">
+                  <label className="field-label">Tombol Shortcut Saat Ini</label>
+                  {isRecordingShortcut ? (
                     <button
-                      key={preset.value}
-                      className={`btn-chip ${config.shortcut === preset.value ? 'selected' : ''}`}
-                      onClick={() => updateConfig({ shortcut: preset.value })}
+                      className="btn-link"
+                      style={{ color: '#f87171' }}
+                      onClick={() => {
+                        setIsRecordingShortcut(false);
+                        setRecordedPreview('');
+                      }}
                     >
-                      {preset.label}
+                      Batal (Esc)
                     </button>
-                  ))}
+                  ) : (
+                    <button
+                      className="btn-link"
+                      onClick={() => updateConfig({ shortcut: 'CommandOrControl+Shift+Space' })}
+                    >
+                      Reset ke Default
+                    </button>
+                  )}
                 </div>
 
-                <div className="custom-shortcut-row">
-                  <label className="field-sublabel">Atau ketik shortcut custom:</label>
-                  <input
-                    type="text"
-                    className="text-input"
-                    value={config.shortcut}
-                    placeholder="Contoh: CommandOrControl+Shift+Space"
-                    onChange={(e) => updateConfig({ shortcut: e.target.value })}
-                  />
+                <div
+                  tabIndex={0}
+                  className={`shortcut-box-interactive ${isRecordingShortcut ? 'recording' : ''}`}
+                  onClick={() => {
+                    if (!isRecordingShortcut) {
+                      setIsRecordingShortcut(true);
+                      setRecordedPreview('');
+                    }
+                  }}
+                  onKeyDown={handleShortcutKeyDown}
+                  title="Klik untuk merekam tombol baru"
+                >
+                  {isRecordingShortcut ? (
+                    <div className="recording-indicator">
+                      <span className="rec-dot" />
+                      <div>
+                        <div className="recording-text">
+                          {recordedPreview || 'Tekan kombinasi tombol di keyboard kamu...'}
+                        </div>
+                        <div className="recording-hint">
+                          Tahan tombol modifier (Cmd/Ctrl, Shift, Alt) lalu tekan tombol utama (cth: Space, D, K)
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="shortcut-keys-row">
+                        {renderKeyBadges(config.shortcut)}
+                      </div>
+                      <button
+                        className="btn-record-trigger"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setIsRecordingShortcut(true);
+                          setRecordedPreview('');
+                        }}
+                      >
+                        <Keyboard size={14} /> Ganti Shortcut
+                      </button>
+                    </>
+                  )}
+                </div>
+
+                <div className="custom-shortcut-row" style={{ marginTop: '10px' }}>
+                  <label className="field-sublabel">Atau pilih dari preset cepat:</label>
+                  <div className="shortcut-presets-grid" style={{ marginTop: '6px' }}>
+                    {SHORTCUT_PRESETS.map((preset) => (
+                      <button
+                        key={preset.value}
+                        className={`btn-chip ${config.shortcut === preset.value ? 'selected' : ''}`}
+                        onClick={() => updateConfig({ shortcut: preset.value })}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
 
