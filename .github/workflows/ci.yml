@@ -20,7 +20,7 @@ jobs:
         platform: [ubuntu-22.04, macos-latest, windows-latest]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Linux system dependencies
         if: matrix.platform == 'ubuntu-22.04'

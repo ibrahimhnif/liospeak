@@ -28,7 +28,7 @@ jobs:
             args: '--bundles nsis,msi'
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Linux system dependencies
         if: matrix.platform == 'ubuntu-22.04'
