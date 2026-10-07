@@ -5,17 +5,33 @@ use tauri::{
     AppHandle, Manager,
 };
 
+use std::sync::Mutex;
+use std::time::Instant;
+
+static LAST_PASTE: Mutex<Option<(String, Instant)>> = Mutex::new(None);
+
 #[tauri::command]
 fn paste_text(app: AppHandle, text: String) -> Result<(), String> {
     use tauri_plugin_clipboard_manager::ClipboardExt;
+
+    // Strict Rust-level deduplication: reject identical text within 1500ms
+    if let Ok(mut guard) = LAST_PASTE.lock() {
+        if let Some((ref last_text, ref last_time)) = *guard {
+            if last_text == &text && last_time.elapsed().as_millis() < 1500 {
+                println!("[Rust paste_text] Suppressing duplicate paste request within 1500ms");
+                return Ok(());
+            }
+        }
+        *guard = Some((text.clone(), Instant::now()));
+    }
 
     // 1. Copy text to clipboard
     app.clipboard()
         .write_text(text)
         .map_err(|e| format!("Gagal menyalin ke clipboard: {}", e))?;
 
-    // 2. Wait a brief moment for the OS clipboard buffer
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    // 2. Wait a brief moment for the OS clipboard buffer to propagate
+    std::thread::sleep(std::time::Duration::from_millis(60));
 
     // 3. Simulate Cmd+V (macOS) or Ctrl+V (Windows/Linux)
     let mut enigo = Enigo::new(&Settings::default())
@@ -24,14 +40,18 @@ fn paste_text(app: AppHandle, text: String) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         let _ = enigo.key(Key::Meta, Direction::Press);
+        std::thread::sleep(std::time::Duration::from_millis(25));
         let _ = enigo.key(Key::Unicode('v'), Direction::Click);
+        std::thread::sleep(std::time::Duration::from_millis(25));
         let _ = enigo.key(Key::Meta, Direction::Release);
     }
 
     #[cfg(not(target_os = "macos"))]
     {
         let _ = enigo.key(Key::Control, Direction::Press);
+        std::thread::sleep(std::time::Duration::from_millis(25));
         let _ = enigo.key(Key::Unicode('v'), Direction::Click);
+        std::thread::sleep(std::time::Duration::from_millis(25));
         let _ = enigo.key(Key::Control, Direction::Release);
     }
 
@@ -145,7 +165,6 @@ fn show_main_window(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-use std::sync::Mutex;
 use tauri::Emitter;
 
 static APP_HANDLE: Mutex<Option<AppHandle>> = Mutex::new(None);

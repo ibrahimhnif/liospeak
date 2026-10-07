@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { Mic, Sparkles, CheckCircle2, AlertCircle } from 'lucide-react';
-import { DictationStatusEvent, DictationState } from '../services/shortcutManager';
+import type { DictationStatusEvent, DictationState } from '../services/shortcutManager';
 
 export const FloatingHUD: React.FC = () => {
   const [status, setStatus] = useState<DictationStatusEvent>({

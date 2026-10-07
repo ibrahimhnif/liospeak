@@ -5,20 +5,17 @@ import { FloatingHUD } from './components/FloatingHUD';
 import './App.css';
 
 export function App() {
-  const [isOverlay, setIsOverlay] = useState<boolean>(() => {
-    return window.location.hash.includes('overlay');
-  });
-
-  useEffect(() => {
+  const [isOverlay] = useState<boolean>(() => {
     try {
       const current = getCurrentWebviewWindow();
       if (current && current.label === 'overlay') {
-        setIsOverlay(true);
+        return true;
       }
     } catch {
       // Running in browser or test
     }
-  }, []);
+    return typeof window !== 'undefined' && window.location.hash.includes('overlay');
+  });
 
   useEffect(() => {
     if (isOverlay) {

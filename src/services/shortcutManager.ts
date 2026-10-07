@@ -1,6 +1,7 @@
 import { register, unregister, unregisterAll } from '@tauri-apps/plugin-global-shortcut';
 import { invoke } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { AudioRecorder } from './audioRecorder';
 import { transcribeAudio } from './sttService';
 import { loadConfig, addHistoryItem } from './configStore';
@@ -25,18 +26,45 @@ class DictationCoordinator {
   private lastFnPressTime = 0;
   private isEnabled = true;
   private startPromise: Promise<void> | null = null;
+  private unlistenFn: (() => void) | null = null;
+  private isProcessing = false;
+  private lastTriggerTime = 0;
+  private lastPastedText = '';
+  private lastPasteTimestamp = 0;
 
   constructor() {
-    // Crucial: Only initialize in MAIN window, never in the overlay HUD window!
-    const isOverlay = typeof window !== 'undefined' && window.location.hash.includes('overlay');
+    // 1. Strict Window Guard: Only initialize in MAIN window, NEVER in overlay HUD!
+    let isOverlay = false;
+    try {
+      const current = getCurrentWebviewWindow();
+      if (current && current.label === 'overlay') {
+        isOverlay = true;
+      }
+    } catch {
+      // ignore
+    }
+    if (typeof window !== 'undefined' && window.location.hash.includes('overlay')) {
+      isOverlay = true;
+    }
+
     if (isOverlay) {
       this.isEnabled = false;
       return;
     }
 
+    // 2. Global Runtime Singleton: Prevent double-instantiation from HMR or multiple imports
+    const win = typeof window !== 'undefined' ? (window as unknown as { __liospeak_coord_active__?: boolean }) : undefined;
+    if (win) {
+      if (win.__liospeak_coord_active__) {
+        this.isEnabled = false;
+        return;
+      }
+      win.__liospeak_coord_active__ = true;
+    }
+
     this.recorder = new AudioRecorder((volume) => {
-      // ONLY broadcast listening state if coordinator is currently listening
-      if (this.state === 'listening') {
+      // ONLY broadcast listening state if coordinator is currently listening and not processing
+      if (this.state === 'listening' && !this.isProcessing) {
         this.broadcastStatus({ state: 'listening', volume });
       }
     });
@@ -56,8 +84,14 @@ class DictationCoordinator {
   }
 
   private async setupFnKeyListener() {
+    if (!this.isEnabled) return;
     try {
-      listen<string>('fn-key-state', async (event) => {
+      if (this.unlistenFn) {
+        this.unlistenFn();
+        this.unlistenFn = null;
+      }
+
+      this.unlistenFn = await listen<string>('fn-key-state', async (event) => {
         const config = loadConfig();
         if (!config.useFnKeyMac) return;
 
@@ -67,11 +101,11 @@ class DictationCoordinator {
         if (fnMode === 'hold') {
           // Push-to-Talk via Fn key
           if (isPressed) {
-            if (this.state === 'idle') {
+            if (this.state === 'idle' && !this.isProcessing) {
               await this.startRecording();
             }
           } else {
-            if (this.state === 'listening') {
+            if (this.state === 'listening' && !this.isProcessing) {
               await this.stopAndTranscribe();
             }
           }
@@ -80,9 +114,9 @@ class DictationCoordinator {
           if (isPressed) {
             const now = Date.now();
             if (now - this.lastFnPressTime < 450) {
-              if (this.state === 'idle') {
+              if (this.state === 'idle' && !this.isProcessing) {
                 await this.startRecording();
-              } else if (this.state === 'listening') {
+              } else if (this.state === 'listening' && !this.isProcessing) {
                 await this.stopAndTranscribe();
               }
               this.lastFnPressTime = 0;
@@ -130,7 +164,10 @@ class DictationCoordinator {
     if (!this.isEnabled) return;
     try {
       if (this.currentShortcut) {
-        await unregister(this.currentShortcut);
+        await unregister(this.currentShortcut).catch(() => {});
+      }
+      if (newShortcut?.trim()) {
+        await unregister(newShortcut.trim()).catch(() => {});
       }
     } catch (e) {
       console.warn('Failed to unregister previous shortcut:', e);
@@ -145,20 +182,20 @@ class DictationCoordinator {
 
         if (isPushToTalk) {
           if (event.state === 'Pressed') {
-            if (this.state === 'idle') {
+            if (this.state === 'idle' && !this.isProcessing) {
               await this.startRecording();
             }
           } else if (event.state === 'Released') {
-            if (this.state === 'listening') {
+            if (this.state === 'listening' && !this.isProcessing) {
               await this.stopAndTranscribe();
             }
           }
         } else {
           // Toggle mode: trigger only on Pressed
           if (event.state === 'Pressed') {
-            if (this.state === 'idle') {
+            if (this.state === 'idle' && !this.isProcessing) {
               await this.startRecording();
-            } else if (this.state === 'listening') {
+            } else if (this.state === 'listening' && !this.isProcessing) {
               await this.stopAndTranscribe();
             }
           }
@@ -174,8 +211,15 @@ class DictationCoordinator {
 
   public async startRecording(): Promise<void> {
     if (!this.isEnabled) return;
-    if (this.state !== 'idle') {
-      termLog(`startRecording diabaikan karena status saat ini: ${this.state}`, 'warn');
+    const now = Date.now();
+    if (now - this.lastTriggerTime < 350) {
+      termLog(`[Debounce] startRecording diabaikan (${now - this.lastTriggerTime}ms)`, 'warn');
+      return;
+    }
+    this.lastTriggerTime = now;
+
+    if (this.state !== 'idle' || this.isProcessing) {
+      termLog(`startRecording diabaikan karena status: ${this.state}, isProcessing: ${this.isProcessing}`, 'warn');
       return;
     }
 
@@ -206,10 +250,22 @@ class DictationCoordinator {
   }
 
   public async stopAndTranscribe(): Promise<void> {
-    if (this.state !== 'listening' || !this.recorder) {
-      termLog(`stopAndTranscribe diabaikan karena status: ${this.state}`, 'warn');
+    const now = Date.now();
+    if (now - this.lastTriggerTime < 350) {
+      termLog(`[Debounce] stopAndTranscribe diabaikan (${now - this.lastTriggerTime}ms)`, 'warn');
       return;
     }
+    this.lastTriggerTime = now;
+
+    // Strict atomic lock: Must be in listening state and not already processing!
+    if (this.state !== 'listening' || this.isProcessing || !this.recorder) {
+      termLog(`[Lock] stopAndTranscribe diabaikan (state: ${this.state}, isProcessing: ${this.isProcessing})`, 'warn');
+      return;
+    }
+
+    // SYNCHRONOUSLY lock state immediately before ANY await!
+    this.isProcessing = true;
+    this.state = 'transcribing';
 
     termLog('>>> [TRIGGER] Menghentikan rekaman & memulai transkripsi...', 'info');
 
@@ -270,10 +326,19 @@ class DictationCoordinator {
 
       const finalText = sttResult.text.trim();
 
-      // 1. Paste text automatically to the user's active cursor
-      termLog(`Menempelkan teks ke kursor via paste_text (${finalText.length} karakter)...`, 'info');
-      await invoke('paste_text', { text: finalText });
-      termLog('Teks berhasil ditempelkan ke aplikasi aktif!', 'info');
+      // Deduplicate: If identical text is being pasted within 2500ms, suppress duplicate paste
+      const pasteNow = Date.now();
+      if (this.lastPastedText === finalText && pasteNow - this.lastPasteTimestamp < 2500) {
+        termLog(`[Deduplicate] Menolak penempelan duplikat untuk teks yang sama dalam 2.5s: "${finalText}"`, 'warn');
+      } else {
+        this.lastPastedText = finalText;
+        this.lastPasteTimestamp = pasteNow;
+
+        // 1. Paste text automatically to the user's active cursor
+        termLog(`Menempelkan teks ke kursor via paste_text (${finalText.length} karakter)...`, 'info');
+        await invoke('paste_text', { text: finalText });
+        termLog('Teks berhasil ditempelkan ke aplikasi aktif!', 'info');
+      }
 
       // 2. Add to history
       addHistoryItem({
@@ -308,6 +373,8 @@ class DictationCoordinator {
         await invoke('hide_overlay');
         await this.broadcastStatus({ state: 'idle' });
       }, 3500);
+    } finally {
+      this.isProcessing = false;
     }
   }
 

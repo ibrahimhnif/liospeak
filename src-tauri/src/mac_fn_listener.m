@@ -16,6 +16,7 @@ void stop_mac_fn_listener(void);
 static id g_global_monitor = nil;
 static id g_local_monitor = nil;
 static BOOL g_was_pressed = NO;
+static NSTimeInterval g_last_fn_event_time = 0;
 
 void start_mac_fn_listener(FnKeyCallback callback) {
     if (g_global_monitor != nil) {
@@ -23,12 +24,19 @@ void start_mac_fn_listener(FnKeyCallback callback) {
     }
 
     g_was_pressed = NO;
+    g_last_fn_event_time = 0;
 
     // Monitor modifier key changes across external active applications
     g_global_monitor = [NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskFlagsChanged
         handler:^(NSEvent *event) {
             BOOL is_pressed = (event.modifierFlags & NSEventModifierFlagFunction) != 0;
+            NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
             if (is_pressed != g_was_pressed) {
+                // Reject rapid key bouncing within 120ms
+                if (now - g_last_fn_event_time < 0.12) {
+                    return;
+                }
+                g_last_fn_event_time = now;
                 g_was_pressed = is_pressed;
                 if (callback) {
                     callback(is_pressed ? 1 : 0);
@@ -40,7 +48,12 @@ void start_mac_fn_listener(FnKeyCallback callback) {
     g_local_monitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskFlagsChanged
         handler:^NSEvent *(NSEvent *event) {
             BOOL is_pressed = (event.modifierFlags & NSEventModifierFlagFunction) != 0;
+            NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
             if (is_pressed != g_was_pressed) {
+                if (now - g_last_fn_event_time < 0.12) {
+                    return event;
+                }
+                g_last_fn_event_time = now;
                 g_was_pressed = is_pressed;
                 if (callback) {
                     callback(is_pressed ? 1 : 0);
