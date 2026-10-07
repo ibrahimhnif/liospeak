@@ -8,6 +8,7 @@ extern "C" {
 
 void start_mac_fn_listener(FnKeyCallback callback);
 void stop_mac_fn_listener(void);
+int is_cursor_in_text_input(void);
 
 #ifdef __cplusplus
 }
@@ -74,3 +75,61 @@ void stop_mac_fn_listener(void) {
     }
     g_was_pressed = NO;
 }
+
+int is_cursor_in_text_input(void) {
+    AXUIElementRef systemWide = AXUIElementCreateSystemWide();
+    if (!systemWide) {
+        return 1; // Fallback: allow if Accessibility is unavailable
+    }
+
+    AXUIElementRef focusedElement = NULL;
+    AXError err = AXUIElementCopyAttributeValue(systemWide, kAXFocusedUIElementAttribute, (CFTypeRef *)&focusedElement);
+    CFRelease(systemWide);
+
+    if (err != kAXErrorSuccess || !focusedElement) {
+        return 0; // No focused UI element
+    }
+
+    // 1. Check if AXValue is settable (editable input / textarea)
+    Boolean isSettable = false;
+    if (AXUIElementIsAttributeSettable(focusedElement, kAXValueAttribute, &isSettable) == kAXErrorSuccess) {
+        if (isSettable) {
+            CFRelease(focusedElement);
+            return 1;
+        }
+    }
+
+    // 2. Check kAXRoleAttribute (AXTextField, AXTextArea, AXComboBox, AXSearchField)
+    CFTypeRef roleRef = NULL;
+    if (AXUIElementCopyAttributeValue(focusedElement, kAXRoleAttribute, &roleRef) == kAXErrorSuccess && roleRef) {
+        NSString *role = (__bridge NSString *)roleRef;
+        BOOL isTextRole = [role isEqualToString:@"AXTextField"] ||
+                          [role isEqualToString:@"AXTextArea"] ||
+                          [role isEqualToString:@"AXComboBox"] ||
+                          [role isEqualToString:@"AXSearchField"];
+        CFRelease(roleRef);
+        if (isTextRole) {
+            CFRelease(focusedElement);
+            return 1;
+        }
+    }
+
+    // 3. Check kAXSubroleAttribute (e.g. contentEditable in browsers/Slack/Notion)
+    CFTypeRef subroleRef = NULL;
+    if (AXUIElementCopyAttributeValue(focusedElement, kAXSubroleAttribute, &subroleRef) == kAXErrorSuccess && subroleRef) {
+        NSString *subrole = (__bridge NSString *)subroleRef;
+        BOOL isTextSubrole = [subrole isEqualToString:@"AXContentEditable2"] ||
+                             [subrole isEqualToString:@"AXContentEditable"] ||
+                             [subrole isEqualToString:@"AXPlainText"] ||
+                             [subrole isEqualToString:@"AXSearchField"];
+        CFRelease(subroleRef);
+        if (isTextSubrole) {
+            CFRelease(focusedElement);
+            return 1;
+        }
+    }
+
+    CFRelease(focusedElement);
+    return 0;
+}
+

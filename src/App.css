@@ -979,6 +979,20 @@ body {
   box-shadow: 0 0 16px rgba(16, 185, 129, 0.5);
 }
 
+.hud-icon-wrap.done.warning {
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  color: #fff;
+  box-shadow: 0 0 16px rgba(245, 158, 11, 0.5);
+}
+
+.hud-title.warning-title {
+  color: #fbbf24;
+}
+
+.hud-preview.warning {
+  color: #fde68a;
+}
+
 .hud-icon-wrap.error {
   background: #f59e0b;
   color: #fff;

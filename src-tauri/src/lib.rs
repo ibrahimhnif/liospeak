@@ -62,6 +62,19 @@ fn paste_text(app: AppHandle, text: String) -> Result<(), String> {
 extern "C" {
     fn start_mac_fn_listener(callback: extern "C" fn(i32));
     fn stop_mac_fn_listener();
+    fn is_cursor_in_text_input() -> i32;
+}
+
+#[tauri::command]
+fn check_is_input_field() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        unsafe { is_cursor_in_text_input() == 1 }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -228,7 +241,8 @@ pub fn run() {
             hide_main_window,
             show_main_window,
             set_fn_listener_enabled,
-            log_to_terminal
+            log_to_terminal,
+            check_is_input_field
         ])
         .setup(|app| {
             // Build Tray Menu

@@ -13,6 +13,8 @@ export interface DictationStatusEvent {
   state: DictationState;
   text?: string;
   error?: string;
+  warning?: string;
+  isInputField?: boolean;
   volume?: number;
   durationMs?: number;
   costUsd?: number;
@@ -326,6 +328,15 @@ class DictationCoordinator {
 
       const finalText = sttResult.text.trim();
 
+      // 1. Detect if active cursor is focused on an editable input field
+      let isInputField = true;
+      try {
+        isInputField = await invoke<boolean>('check_is_input_field');
+        termLog(`[Input Detection] Apakah kursor berada di kolom teks? -> ${isInputField}`, 'info');
+      } catch (err) {
+        console.warn('Gagal mengecek status input field:', err);
+      }
+
       // Deduplicate: If identical text is being pasted within 2500ms, suppress duplicate paste
       const pasteNow = Date.now();
       if (this.lastPastedText === finalText && pasteNow - this.lastPasteTimestamp < 2500) {
@@ -334,10 +345,10 @@ class DictationCoordinator {
         this.lastPastedText = finalText;
         this.lastPasteTimestamp = pasteNow;
 
-        // 1. Paste text automatically to the user's active cursor
+        // Paste text to active application/cursor
         termLog(`Menempelkan teks ke kursor via paste_text (${finalText.length} karakter)...`, 'info');
         await invoke('paste_text', { text: finalText });
-        termLog('Teks berhasil ditempelkan ke aplikasi aktif!', 'info');
+        termLog('Teks berhasil disalin & ditempelkan ke aplikasi aktif!', 'info');
       }
 
       // 2. Add to history
@@ -351,10 +362,14 @@ class DictationCoordinator {
         costIdr: sttResult.costIdr,
       });
 
-      // 3. Show success status on overlay
+      // 3. Show success status on overlay with smart input indicator
+      const warning = !isInputField ? 'Kursor di luar kolom teks (Tersalin ke clipboard)' : undefined;
+
       await this.broadcastStatus({
         state: 'done',
         text: finalText,
+        warning,
+        isInputField,
         durationMs: recordResult.durationMs,
         costUsd: sttResult.costUsd,
         formattedCost: sttResult.formattedCost,

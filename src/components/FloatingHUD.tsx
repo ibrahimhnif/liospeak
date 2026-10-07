@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { Mic, Sparkles, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Mic, Sparkles, CheckCircle2, AlertCircle, ClipboardCheck } from 'lucide-react';
 import type { DictationStatusEvent, DictationState } from '../services/shortcutManager';
 
 export const FloatingHUD: React.FC = () => {
@@ -98,12 +98,18 @@ export const FloatingHUD: React.FC = () => {
         {/* DONE STATE */}
         {state === 'done' && (
           <>
-            <div className="hud-icon-wrap done">
-              <CheckCircle2 className="hud-icon" size={20} />
+            <div className={`hud-icon-wrap done ${status.warning ? 'warning' : ''}`}>
+              {status.warning ? (
+                <ClipboardCheck className="hud-icon" size={20} />
+              ) : (
+                <CheckCircle2 className="hud-icon" size={20} />
+              )}
             </div>
             <div className="hud-body">
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-                <span className="hud-title">Ditempel ke kursor!</span>
+                <span className={`hud-title ${status.warning ? 'warning-title' : ''}`}>
+                  {status.warning ? 'Tersalin ke Clipboard' : 'Ditempel ke kursor!'}
+                </span>
                 {status.formattedCost && (
                   <span
                     style={{
@@ -119,8 +125,8 @@ export const FloatingHUD: React.FC = () => {
                   </span>
                 )}
               </div>
-              <span className="hud-preview" title={status.text}>
-                {status.text ? `"${status.text}"` : 'Teks siap'}
+              <span className={`hud-preview ${status.warning ? 'warning' : ''}`} title={status.text}>
+                {status.warning ? '⚠️ Kursor di luar kolom teks — tinggal tekan ⌘V' : (status.text ? `"${status.text}"` : 'Teks siap')}
               </span>
             </div>
           </>
