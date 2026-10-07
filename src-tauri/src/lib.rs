@@ -14,6 +14,18 @@ static LAST_PASTE: Mutex<Option<(String, Instant)>> = Mutex::new(None);
 fn paste_text(app: AppHandle, text: String) -> Result<(), String> {
     use tauri_plugin_clipboard_manager::ClipboardExt;
 
+    // Without Accessibility trust, enigo's synthetic Cmd+V is silently dropped by macOS.
+    // Fail loudly so the HUD can tell the user to grant the permission instead.
+    #[cfg(target_os = "macos")]
+    {
+        if unsafe { ax_check_trusted() } == 0 {
+            return Err(
+                "Izin Accessibility belum diberikan. Buka System Settings → Privacy & Security → Accessibility, aktifkan LioSpeak, lalu coba lagi."
+                    .to_string(),
+            );
+        }
+    }
+
     // Strict Rust-level deduplication: reject identical text within 1500ms
     if let Ok(mut guard) = LAST_PASTE.lock() {
         if let Some((ref last_text, ref last_time)) = *guard {
@@ -63,6 +75,8 @@ extern "C" {
     fn start_mac_fn_listener(callback: extern "C" fn(i32));
     fn stop_mac_fn_listener();
     fn is_cursor_in_text_input() -> i32;
+    fn ax_check_trusted() -> i32;
+    fn ax_request_trusted() -> i32;
 }
 
 #[tauri::command]
@@ -77,12 +91,97 @@ fn check_is_input_field() -> bool {
     }
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionReport {
+    pub platform: String,
+    pub accessibility: bool,
+    pub input_monitoring: bool,
+}
+
+#[tauri::command]
+fn check_permissions() -> PermissionReport {
+    #[cfg(target_os = "macos")]
+    {
+        PermissionReport {
+            platform: "macos".to_string(),
+            accessibility: unsafe { ax_check_trusted() } == 1,
+            input_monitoring: unsafe { CGPreflightListenEventAccess() },
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Windows/Linux have no user-grantable permission for global hotkeys or
+        // synthetic input, so the onboarding gate never needs to appear.
+        PermissionReport {
+            platform: std::env::consts::OS.to_string(),
+            accessibility: true,
+            input_monitoring: true,
+        }
+    }
+}
+
+#[tauri::command]
+fn request_accessibility_permission() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        unsafe { ax_request_trusted() == 1 }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
+}
+
+#[tauri::command]
+fn request_input_monitoring_permission() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        unsafe { CGRequestListenEventAccess() }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
+}
+
+#[tauri::command]
+fn open_permissions_settings(pane: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        const ALLOWED: [&str; 4] = ["Accessibility", "ListenEvent", "Microphone", "ScreenCapture"];
+        if !ALLOWED.contains(&pane.as_str()) {
+            return Err(format!("Pane izin tidak dikenal: {}", pane));
+        }
+        let url = format!(
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_{}",
+            pane
+        );
+        std::process::Command::new("open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| format!("Gagal membuka System Settings: {}", e))?;
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = pane;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn restart_app(app: AppHandle) {
+    app.restart();
+}
+
 #[cfg(target_os = "macos")]
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
     fn CGEventCreate(source: *const std::ffi::c_void) -> *mut std::ffi::c_void;
     fn CGEventGetLocation(event: *mut std::ffi::c_void) -> CGPoint;
     fn CFRelease(cf: *mut std::ffi::c_void);
+    fn CGPreflightListenEventAccess() -> bool;
+    fn CGRequestListenEventAccess() -> bool;
 }
 
 #[cfg(target_os = "macos")]
@@ -242,7 +341,12 @@ pub fn run() {
             show_main_window,
             set_fn_listener_enabled,
             log_to_terminal,
-            check_is_input_field
+            check_is_input_field,
+            check_permissions,
+            request_accessibility_permission,
+            request_input_monitoring_permission,
+            open_permissions_settings,
+            restart_app
         ])
         .setup(|app| {
             // Build Tray Menu

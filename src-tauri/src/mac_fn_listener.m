@@ -1,4 +1,5 @@
 #import <Cocoa/Cocoa.h>
+#import <ApplicationServices/ApplicationServices.h>
 
 typedef void (*FnKeyCallback)(int is_pressed);
 
@@ -9,6 +10,8 @@ extern "C" {
 void start_mac_fn_listener(FnKeyCallback callback);
 void stop_mac_fn_listener(void);
 int is_cursor_in_text_input(void);
+int ax_check_trusted(void);
+int ax_request_trusted(void);
 
 #ifdef __cplusplus
 }
@@ -131,5 +134,16 @@ int is_cursor_in_text_input(void) {
 
     CFRelease(focusedElement);
     return 0;
+}
+
+int ax_check_trusted(void) {
+    return AXIsProcessTrusted() ? 1 : 0;
+}
+
+int ax_request_trusted(void) {
+    // Shows the macOS "wants to control this computer using accessibility features"
+    // alert and opens System Settings -> Privacy & Security -> Accessibility.
+    NSDictionary *options = @{(__bridge id)kAXTrustedCheckOptionPrompt: @YES};
+    return AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)options) ? 1 : 0;
 }
 

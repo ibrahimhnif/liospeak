@@ -19,6 +19,7 @@ import {
   RotateCcw,
   DollarSign,
   Wallet,
+  TriangleAlert,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { openUrl } from '@tauri-apps/plugin-opener';
@@ -31,6 +32,8 @@ import {
 } from '../services/configStore';
 import { dictationCoordinator } from '../services/shortcutManager';
 import { formatUsd, formatIdr } from '../services/costCalculator';
+import { usePermissions } from '../hooks/usePermissions';
+import { PermissionGate } from './PermissionGate';
 
 const SHORTCUT_PRESETS = [
   { label: 'Cmd/Ctrl + Shift + Space (Bawaan)', value: 'CommandOrControl+Shift+Space' },
@@ -64,6 +67,7 @@ Keluarkan HANYA hasil teks transkripsi tanpa komentar tambahan.`,
 };
 
 export const SettingsView: React.FC = () => {
+  const perm = usePermissions();
   const [config, setConfig] = useState<AppConfig>(loadConfig());
   const [activeTab, setActiveTab] = useState<'shortcut' | 'engine' | 'prompt' | 'history' | 'costs'>('shortcut');
   const [showApiKey, setShowApiKey] = useState(false);
@@ -152,6 +156,15 @@ export const SettingsView: React.FC = () => {
       console.warn('Pre-warm error:', e);
     });
   }, []);
+
+  // Re-arm the Fn listener & shortcut once OS permissions land: the native Fn
+  // monitor silently no-ops until Input Monitoring is granted.
+  useEffect(() => {
+    if (!perm.allGranted) return;
+    const cfg = loadConfig();
+    dictationCoordinator.updateShortcut(cfg.shortcut).catch(() => {});
+    dictationCoordinator.updateFnListener(cfg.useFnKeyMac).catch(() => {});
+  }, [perm.allGranted]);
 
   const updateConfig = (patch: Partial<AppConfig>) => {
     const next = { ...config, ...patch };
@@ -242,7 +255,20 @@ export const SettingsView: React.FC = () => {
   };
 
   return (
-    <div className="app-container">
+    <>
+      {perm.isMac && !perm.allGranted && (
+        <PermissionGate
+          status={perm.status}
+          micBusy={perm.micBusy}
+          onRequest={perm.request}
+          onRequestMicrophone={perm.requestMicrophone}
+          onOpenSettings={perm.openSettings}
+          onRecheck={perm.refresh}
+          onRestart={perm.restart}
+        />
+      )}
+
+      <div className="app-container">
       {/* HEADER */}
       <header className="app-header">
         <div className="header-brand">
@@ -260,10 +286,17 @@ export const SettingsView: React.FC = () => {
         </div>
 
         <div className="header-actions">
-          <span className="status-badge ready">
-            <span className="pulse-dot" />
-            Siap Mendikte
-          </span>
+          {perm.isMac && !perm.allGranted ? (
+            <span className="status-badge warn">
+              <TriangleAlert size={12} />
+              Izin Diperlukan
+            </span>
+          ) : (
+            <span className="status-badge ready">
+              <span className="pulse-dot" />
+              Siap Mendikte
+            </span>
+          )}
           <button
             className="btn-icon"
             onClick={handleMinimizeToTray}
@@ -1039,6 +1072,7 @@ export const SettingsView: React.FC = () => {
           )}
         </main>
       </div>
-    </div>
+      </div>
+    </>
   );
 };
